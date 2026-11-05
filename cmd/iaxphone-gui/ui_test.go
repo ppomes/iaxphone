@@ -24,6 +24,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -36,6 +37,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/ppomes/iaxphone/audio"
+	"github.com/ppomes/iaxphone/history"
 	"github.com/ppomes/iaxphone/internal/fakeiax"
 	"github.com/ppomes/iaxphone/phone"
 )
@@ -69,6 +71,10 @@ func TestWindowDrivesCalls(t *testing.T) {
 	a := test.NewApp()
 	g := newGUI(a, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	g.settings = settings{Server: srv.Addr(), Username: "phone", Register: true, JitterMs: audio.DefaultJitterMs, Audio: "none"}
+	var err error
+	if g.history, err = history.Open(filepath.Join(t.TempDir(), "history.jsonl")); err != nil {
+		t.Fatal(err)
+	}
 	if !g.callBtn.Disabled() || g.regStatus.Text != "Not connected" {
 		t.Errorf("before connect: call enabled=%v status %q", !g.callBtn.Disabled(), g.regStatus.Text)
 	}
@@ -165,6 +171,23 @@ func TestWindowDrivesCalls(t *testing.T) {
 	pump(t, g, p, "declined", hasText(g.details, "ended by us"))
 	if causes := srv.HangupCauses(); len(causes) != 2 || causes[1] != "Call Rejected" {
 		t.Errorf("server saw %q", causes)
+	}
+
+	// The three calls are in the history, newest first; picking one from
+	// the list puts its number back in the entry.
+	h := g.history.Entries()
+	if len(h) != 3 || !h[0].Missed() || h[0].Name != "Asterisk" || h[1].Outgoing || !h[1].Answered ||
+		!h[2].Outgoing || !h[2].Answered || h[2].Number != "600" || h[2].Cause != "hung up" || h[0].Cause != "hung up" {
+		t.Fatalf("history %+v", h)
+	}
+	g.number.SetText("")
+	g.showHistory()
+	if g.historyList == nil {
+		t.Fatal("history list not open")
+	}
+	g.historyList.Select(2)
+	if g.number.Text != "600" {
+		t.Errorf("number after pick %q", g.number.Text)
 	}
 }
 

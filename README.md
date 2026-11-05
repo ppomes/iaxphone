@@ -23,6 +23,7 @@ builds it; the CLI does not need any of that.
 iax2/              protocol library: framing, information elements, calls, client
 audio/             G.711, jitter buffer, sound devices (miniaudio), audio engine
 phone/             softphone controller: registration, one call, audio bridged; what UIs drive
+history/           the call history file
 cmd/iaxphone/      CLI client
 cmd/iaxphone-gui/  Fyne window on top of phone
 internal/fakeiax/  minimal IAX2 server for the tests above iax2
@@ -52,7 +53,7 @@ Early skeleton. What exists today:
 - [ ] AES-128 frame encryption
 - [ ] Opus (cgo, libopus)
 - [x] `phone` controller package (events, dial/answer/hangup/mute) shared by the UIs
-- [x] GUI (Fyne): dial, answer, hang up, keypad/DTMF, mute, level meters, settings, status icon, single instance
+- [x] GUI (Fyne): dial, answer, hang up, keypad/DTMF, mute, level meters, settings, status icon, single instance, call history
 - [x] ring and ringback tones (generated locally, IAX2 carries no audio before the answer), device selection
 
 ## Building
@@ -71,7 +72,12 @@ the DTMF), Call / Answer / Hang up, mute, peak level meters and the keys
 received. The gear opens the settings (server, account, caller id,
 registration, jitter, sound, microphone and speaker), stored in Fyne's
 preferences for the app id
-`com.github.ppomes.iaxphone`, secret included, in clear.
+`com.github.ppomes.iaxphone`, secret included, in clear. The clock button
+opens the call history, newest first, with the missed calls marked and the
+talk time; tapping an entry puts its number back in the entry to call it.
+The history is one JSON line per call in
+`$XDG_DATA_HOME/iaxphone/history.jsonl` (`~/.local/share` by default),
+kept to the last 500 calls.
 
 On a desktop with a status area (the StatusNotifierItem protocol: GNOME
 with the AppIndicator extension, KDE, Xfce...) the phone also sits in it

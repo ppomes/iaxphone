@@ -36,6 +36,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/ppomes/iaxphone/audio"
+	"github.com/ppomes/iaxphone/history"
 	"github.com/ppomes/iaxphone/phone"
 )
 
@@ -51,6 +52,9 @@ type gui struct {
 	devices  func() ([]audio.DeviceInfo, error) // for the settings; listDevices
 	form     *settingsForm                      // the open settings form, if any
 	tray     *tray                              // the status icon, nil without one
+	history  *history.Log                       // past calls, nil without a file
+
+	historyList *widget.List // the open history list, if any
 
 	reg      phone.RegInfo
 	call     phone.CallInfo
@@ -120,7 +124,8 @@ func (g *gui) build() {
 	g.details.Wrapping = fyne.TextWrapWord
 
 	settingsBtn := widget.NewButtonWithIcon("", theme.SettingsIcon(), g.showSettings)
-	top := container.NewBorder(nil, nil, nil, settingsBtn, g.regStatus)
+	historyBtn := widget.NewButtonWithIcon("", theme.HistoryIcon(), g.showHistory)
+	top := container.NewBorder(nil, nil, nil, container.NewHBox(historyBtn, settingsBtn), g.regStatus)
 	meters := container.New(&twoColumns{},
 		widget.NewLabel("Mic level"), g.micMeter,
 		widget.NewLabel("Speaker level"), g.spkMeter,
@@ -208,6 +213,7 @@ func (g *gui) handle(ev phone.Event) {
 		g.showKeys()
 	case phone.EventEnded:
 		g.lastCall = endedText(ev.Call)
+		g.recordCall(ev.Call)
 		g.reset()
 	}
 	g.updateButtons()

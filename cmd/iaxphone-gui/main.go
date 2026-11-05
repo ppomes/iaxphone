@@ -36,6 +36,7 @@ import (
 	"fyne.io/fyne/v2/app"
 
 	"github.com/ppomes/iaxphone/audio"
+	"github.com/ppomes/iaxphone/history"
 	"github.com/ppomes/iaxphone/phone"
 )
 
@@ -46,6 +47,11 @@ func main() {
 	a := app.NewWithID(appID)
 	g := newGUI(a, log)
 	g.win.Resize(fyne.NewSize(340, 560))
+	if path, err := history.DefaultPath(); err != nil {
+		log.Warn("history", "err", err)
+	} else if g.history, err = history.Open(path); err != nil {
+		log.Warn("history", "err", err) // run without one
+	}
 	lock, err := claimInstance(instanceSocket(), func() { fyne.Do(g.showWindow) })
 	if errors.Is(err, errAlreadyRunning) {
 		fmt.Fprintln(os.Stderr, "iaxphone-gui is already running, showing its window")

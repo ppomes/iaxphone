@@ -22,6 +22,20 @@ under
 .IR ~/.config/fyne/com.github.ppomes.iaxphone/ ,
 the secret included, in clear.
 .PP
+The clock button opens the call history, newest first, missed calls
+marked and the talk time shown; tapping an entry puts its number back in
+the entry to call it. The history is one JSON line per call in
+.IR $XDG_DATA_HOME/iaxphone/history.jsonl
+.RI ( ~/.local/share
+by default), kept to the last 500 calls.
+.SH FILES
+.TP
+.I ~/.config/fyne/com.github.ppomes.iaxphone/preferences.json
+The settings.
+.TP
+.I ~/.local/share/iaxphone/history.jsonl
+The call history.
+.PP
 On a desktop with a status area (StatusNotifierItem: GNOME with the
 AppIndicator extension, KDE, Xfce...) a handset icon shows the state, grey
 when not connected, blue when ready, orange while ringing, green in a
