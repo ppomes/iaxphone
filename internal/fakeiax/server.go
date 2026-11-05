@@ -25,10 +25,13 @@
 package fakeiax
 
 import (
+	"bytes"
 	"net"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/ppomes/iaxphone/audio"
 	"github.com/ppomes/iaxphone/iax2"
 )
 
@@ -44,6 +47,7 @@ type Server struct {
 	client   *net.UDPAddr
 	callNo   uint16 // our call number for the current call
 	peerCall uint16 // the client's call number for the current call
+	audioTS  uint32 // timestamp of the next SendAudio frame
 }
 
 // New starts a server; it is closed when the test ends.
@@ -184,6 +188,34 @@ func (s *Server) PressKey(digit byte, oseq uint8) {
 	for i, typ := range []iax2.FrameType{iax2.FrameDTMFBegin, iax2.FrameDTMFEnd} {
 		s.send(to, &iax2.FullFrame{SrcCall: no, DstCall: peer, Timestamp: 300 + 100*uint32(i), //nolint:gosec // 0 or 1
 			OSeqno: oseq + uint8(i), ISeqno: 9, Type: typ, Subclass: uint64(digit)}) //nolint:gosec // 0 or 1
+	}
+}
+
+// SendAudio sends count voice mini frames of frameMs each on the current
+// call, paced in real time, timestamps following on from the previous
+// audio (the first voice frame is at 40), loud enough to meter: what a
+// peer with its own packetisation sends.
+func (s *Server) SendAudio(frameMs, count int) {
+	s.mu.Lock()
+	to, no := s.client, s.callNo
+	if s.audioTS == 0 {
+		s.audioTS = 60
+	}
+	ts := s.audioTS
+	s.audioTS += uint32(frameMs * count) //nolint:gosec // small
+	s.mu.Unlock()
+	data := bytes.Repeat([]byte{audio.LinearToUlaw(12000)}, frameMs*audio.SampleRate/1000)
+	for range count {
+		f := &iax2.MiniFrame{SrcCall: no, Timestamp: uint16(ts), Data: data} //nolint:gosec // low 16 bits
+		b, err := f.AppendTo(nil)
+		if err != nil {
+			s.tb.Fatal(err)
+		}
+		if _, err := s.conn.WriteToUDP(b, to); err != nil {
+			s.tb.Error(err)
+		}
+		ts += uint32(frameMs) //nolint:gosec // small
+		time.Sleep(time.Duration(frameMs) * time.Millisecond)
 	}
 }
 

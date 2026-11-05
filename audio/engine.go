@@ -45,7 +45,7 @@ type Engine struct {
 	tone   atomic.Pointer[Tone]
 	wg     sync.WaitGroup
 
-	decBuf []int16
+	pcmQ []int16 // decoded audio waiting for the playback callback
 
 	captured, sent, sendErrors, sendDropped atomic.Int64
 	playedFrames, silentFrames, toneFrames  atomic.Int64
@@ -67,12 +67,12 @@ const sendQueue = 16
 // NewEngine builds an engine; depthMs is the jitter buffer depth.
 func NewEngine(dev Device, codec Codec, depthMs int, send func(payload []byte) error) *Engine {
 	return &Engine{
-		dev:    dev,
-		codec:  codec,
-		jb:     NewJitterBuffer(depthMs, 1000*FrameSamples/SampleRate),
-		send:   send,
-		out:    make(chan []byte, sendQueue),
-		decBuf: make([]int16, 0, FrameSamples),
+		dev:   dev,
+		codec: codec,
+		jb:    NewJitterBuffer(depthMs, 1000*FrameSamples/SampleRate),
+		send:  send,
+		out:   make(chan []byte, sendQueue),
+		pcmQ:  make([]int16, 0, 4*FrameSamples),
 	}
 }
 
@@ -111,7 +111,7 @@ func (e *Engine) Start() error {
 
 // Receive queues a frame from the network for playback.
 func (e *Engine) Receive(ts uint32, payload []byte) {
-	e.jb.Put(ts, payload)
+	e.jb.Put(ts, e.codec.Samples(payload)*1000/SampleRate, payload)
 }
 
 // Stop stops the device and the sender; it is safe to call more than once.
@@ -162,15 +162,27 @@ func (e *Engine) onPlayback(pcm []int16) {
 		updatePeak(&e.peakOut, pcm)
 		return
 	}
-	data, _ := e.jb.Get()
-	if data == nil {
+	// Top the queue up to one callback's worth: a frame may be longer or
+	// shorter than the callback asks for.
+	for len(e.pcmQ) < len(pcm) {
+		data, lost := e.jb.Get()
+		if data == nil {
+			if !lost {
+				break // nothing to play yet
+			}
+			e.pcmQ = append(e.pcmQ, make([]int16, FrameSamples)...) // a frame period of silence
+			continue
+		}
+		e.pcmQ = e.codec.Decode(e.pcmQ, data)
+	}
+	if len(e.pcmQ) == 0 {
 		e.silentFrames.Add(1)
 		clear(pcm)
 		return
 	}
-	e.decBuf = e.codec.Decode(e.decBuf[:0], data)
-	n := copy(pcm, e.decBuf)
+	n := copy(pcm, e.pcmQ)
 	clear(pcm[n:])
+	e.pcmQ = append(e.pcmQ[:0], e.pcmQ[n:]...)
 	e.playedFrames.Add(1)
 	updatePeak(&e.peakOut, pcm)
 }

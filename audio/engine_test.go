@@ -23,6 +23,7 @@ package audio
 import (
 	"errors"
 	"math"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -158,6 +159,41 @@ func TestEngineTone(t *testing.T) {
 		t.Errorf("sample after tone %d", out[0])
 	}
 	if st := eng.Stats(); st.Tone != 1 || st.Silent != 1 || st.Played != 0 {
+		t.Errorf("stats %+v", st)
+	}
+}
+
+// A peer sending 40 ms frames: the playback callbacks, 20 ms each, must get
+// the whole signal in order, with nothing counted lost or dropped.
+func TestEngineLongFrames(t *testing.T) {
+	dev := &fakeDevice{}
+	eng := NewEngine(dev, Ulaw{}, 40, func([]byte) error { return nil })
+	if err := eng.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Stop() //nolint:errcheck
+	// A ramp over 4 frames of 40 ms, u-law exact at these values.
+	const frames = 4
+	var want []int16
+	for ts := uint32(0); ts < frames*40; ts += 40 {
+		pcm := make([]int16, 2*FrameSamples)
+		for i := range pcm {
+			pcm[i] = int16(ts) * 50 //nolint:gosec // small
+		}
+		want = append(want, Ulaw{}.Decode(nil, Ulaw{}.Encode(nil, pcm))...)
+		eng.Receive(ts, Ulaw{}.Encode(nil, pcm))
+	}
+	var got []int16
+	out := make([]int16, FrameSamples)
+	for range 2 * frames {
+		dev.playback(out)
+		got = append(got, out...)
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("playback differs from the signal (first %v..., want %v...)", got[:4], want[:4])
+	}
+	st := eng.Stats()
+	if st.Played != 2*frames || st.Silent != 0 || st.Jitter.Lost != 0 || st.Jitter.Dropped != 0 || st.Jitter.Underruns != 0 {
 		t.Errorf("stats %+v", st)
 	}
 }

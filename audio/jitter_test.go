@@ -22,6 +22,7 @@ package audio
 
 import (
 	"fmt"
+	"slices"
 	"testing"
 )
 
@@ -32,12 +33,12 @@ func TestJitterPrebufferAndSteadyState(t *testing.T) {
 	if d, lost := jb.Get(); d != nil || lost {
 		t.Fatal("Get before any Put should play silence")
 	}
-	jb.Put(100, frame(100))
-	jb.Put(120, frame(120))
+	jb.Put(100, 20, frame(100))
+	jb.Put(120, 20, frame(120))
 	if d, _ := jb.Get(); d != nil {
 		t.Fatalf("40 ms queued, depth 60: should still prebuffer, got %q", d)
 	}
-	jb.Put(140, frame(140))
+	jb.Put(140, 20, frame(140))
 	for _, ts := range []uint32{100, 120, 140} {
 		d, lost := jb.Get()
 		if lost || string(d) != string(frame(ts)) {
@@ -52,13 +53,13 @@ func TestJitterPrebufferAndSteadyState(t *testing.T) {
 
 func TestJitterReorderAndLoss(t *testing.T) {
 	jb := NewJitterBuffer(40, 20)
-	jb.Put(20, frame(20))
-	jb.Put(0, frame(0)) // out of order during prebuffer
+	jb.Put(20, 20, frame(20))
+	jb.Put(0, 20, frame(0)) // out of order during prebuffer
 	if d, _ := jb.Get(); string(d) != "f0" {
 		t.Fatalf("got %q, want f0", d)
 	}
-	jb.Put(60, frame(60)) // 40 is missing
-	jb.Put(80, frame(80))
+	jb.Put(60, 20, frame(60)) // 40 is missing
+	jb.Put(80, 20, frame(80))
 	if d, _ := jb.Get(); string(d) != "f20" {
 		t.Fatalf("got %q, want f20", d)
 	}
@@ -66,7 +67,7 @@ func TestJitterReorderAndLoss(t *testing.T) {
 	if d != nil || !lost {
 		t.Fatalf("expected a lost frame at ts 40, got %q, %v", d, lost)
 	}
-	jb.Put(40, frame(40)) // arrives too late
+	jb.Put(40, 20, frame(40)) // arrives too late
 	if d, _ := jb.Get(); string(d) != "f60" {
 		t.Fatalf("got %q, want f60", d)
 	}
@@ -78,8 +79,8 @@ func TestJitterReorderAndLoss(t *testing.T) {
 
 func TestJitterUnderrunAndResume(t *testing.T) {
 	jb := NewJitterBuffer(40, 20)
-	jb.Put(0, frame(0))
-	jb.Put(20, frame(20))
+	jb.Put(0, 20, frame(0))
+	jb.Put(20, 20, frame(20))
 	jb.Get()
 	jb.Get()
 	if d, lost := jb.Get(); d != nil || lost {
@@ -90,11 +91,11 @@ func TestJitterUnderrunAndResume(t *testing.T) {
 	}
 	// The stream resumes much later: playout must jump there, not count
 	// every missing 20 ms as a loss.
-	jb.Put(5000, frame(5000))
+	jb.Put(5000, 20, frame(5000))
 	if d, _ := jb.Get(); d != nil {
 		t.Fatal("should prebuffer again after an underrun")
 	}
-	jb.Put(5020, frame(5020))
+	jb.Put(5020, 20, frame(5020))
 	if d, _ := jb.Get(); string(d) != "f5000" {
 		t.Fatalf("got %q, want f5000", d)
 	}
@@ -106,7 +107,7 @@ func TestJitterUnderrunAndResume(t *testing.T) {
 func TestJitterOverflowTrims(t *testing.T) {
 	jb := NewJitterBuffer(40, 20) // max 160 ms
 	for ts := uint32(0); ts < 400; ts += 20 {
-		jb.Put(ts, frame(ts))
+		jb.Put(ts, 20, frame(ts))
 	}
 	st := jb.Stats()
 	if st.Dropped == 0 || jb.Queued() > 160 {
@@ -120,9 +121,46 @@ func TestJitterOverflowTrims(t *testing.T) {
 
 func TestJitterDuplicate(t *testing.T) {
 	jb := NewJitterBuffer(20, 20)
-	jb.Put(0, frame(0))
-	jb.Put(0, frame(0))
+	jb.Put(0, 20, frame(0))
+	jb.Put(0, 20, frame(0))
 	if st := jb.Stats(); st.Late != 1 {
 		t.Fatalf("stats %+v", st)
+	}
+}
+
+// The peer's frames may be longer than ours: the playout point moves by
+// each frame's own duration, nothing is counted lost.
+func TestJitterBufferFrameSizes(t *testing.T) {
+	jb := NewJitterBuffer(40, 20) // holds 160 ms at most
+	for ts := uint32(0); ts < 160; ts += 40 {
+		jb.Put(ts, 40, frame(ts))
+	}
+	for ts := uint32(0); ts < 160; ts += 40 {
+		data, lost := jb.Get()
+		if data == nil || lost {
+			t.Fatalf("40 ms frame %d: data %v lost %v", ts, data != nil, lost)
+		}
+	}
+	if st := jb.Stats(); st.Played != 4 || st.Lost != 0 || st.Underruns != 0 || st.Dropped != 0 {
+		t.Errorf("40 ms stats %+v", st)
+	}
+
+	// 30 ms frames with one missing: a frame period of silence, then the
+	// stream picks up again within the half-period tolerance.
+	jb = NewJitterBuffer(30, 20)
+	jb.Put(1000, 30, frame(1000))
+	jb.Put(1030, 30, frame(1030))
+	jb.Put(1090, 30, frame(1090)) // 1060 is missing
+	jb.Put(1120, 30, frame(1120))
+	var got []bool
+	for range 5 {
+		data, _ := jb.Get()
+		got = append(got, data != nil)
+	}
+	if want := []bool{true, true, false, true, true}; !slices.Equal(got, want) {
+		t.Errorf("30 ms playout %v, want %v", got, want)
+	}
+	if st := jb.Stats(); st.Played != 4 || st.Lost != 1 {
+		t.Errorf("30 ms stats %+v", st)
 	}
 }

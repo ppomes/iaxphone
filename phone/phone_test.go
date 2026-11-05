@@ -404,3 +404,35 @@ func TestDTMF(t *testing.T) {
 		t.Errorf("SendDTMF after hangup: %v", err)
 	}
 }
+
+// The peer packetises as it likes: 40 ms and 30 ms frames must play
+// through, nothing lost or dropped, the way a 20 ms stream would.
+func TestPeerFrameSizes(t *testing.T) {
+	srv := fakeiax.New(t)
+	p := startPhone(t, srv, false)
+	if err := p.Dial("600"); err != nil {
+		t.Fatal(err)
+	}
+	next(t, p, EventDialing)
+	next(t, p, EventRemoteRinging)
+	next(t, p, EventAnswered)
+	srv.SendAudio(40, 10) // 400 ms
+	srv.SendAudio(30, 10) // 300 ms
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && p.Stats().Jitter.Received < 21 { // plus the server's first frame
+		time.Sleep(10 * time.Millisecond)
+	}
+	time.Sleep(300 * time.Millisecond) // let the queue play out
+	st := p.Stats()
+	if st.Jitter.Received != 21 || st.Jitter.Lost != 0 || st.Jitter.Dropped != 0 || st.Jitter.Late != 0 {
+		t.Errorf("jitter stats %+v", st.Jitter)
+	}
+	// 720 ms of audio at 20 ms a callback.
+	if st.Played < 30 || st.Played > 40 {
+		t.Errorf("played %d callbacks, want 36 or so (stats %+v)", st.Played, st)
+	}
+	if err := p.Hangup(); err != nil {
+		t.Fatal(err)
+	}
+	next(t, p, EventEnded)
+}

@@ -30,6 +30,9 @@ type Codec interface {
 	Encode(dst []byte, pcm []int16) []byte
 	// Decode appends the decoded samples of data to dst.
 	Decode(dst []int16, data []byte) []int16
+	// Samples is how many samples data decodes to, without decoding it:
+	// the peer chooses its frame size and need not use FrameSamples.
+	Samples(data []byte) int
 }
 
 // SampleRate is the only sample rate supported for now.

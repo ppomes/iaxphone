@@ -29,11 +29,16 @@ import (
 // out at a steady pace to the playback goroutine.
 //
 // It is a fixed-depth buffer: playout starts once depth milliseconds of
-// audio are queued, then Get is expected every frame period. A missing frame
-// is reported as lost (the caller plays silence); an empty buffer is an
-// underrun after which playout pauses until depth milliseconds are queued
-// again; a buffer that grows past the maximum (sender clock running faster
-// than ours, or a burst after a network stall) is trimmed from the front.
+// audio are queued, then Get is expected each time the caller has played
+// what it last got. A missing frame is reported as lost (the caller plays
+// a frame period of silence); an empty buffer is an underrun after which
+// playout pauses until depth milliseconds are queued again; a buffer that
+// grows past the maximum (sender clock running faster than ours, or a
+// burst after a network stall) is trimmed from the front.
+//
+// Frames need not all be the frame period long: the peer picks its own
+// packetisation (20 ms is usual, 30 or 40 happen), so each frame carries
+// its duration and the playout point advances by it.
 //
 // An adaptive depth and packet loss concealment are left for later.
 type JitterBuffer struct {
@@ -48,6 +53,7 @@ type JitterBuffer struct {
 
 type jbFrame struct {
 	ts   uint32
+	ms   uint32 // duration
 	data []byte
 }
 
@@ -80,11 +86,14 @@ func NewJitterBuffer(depthMs, frameMs int) *JitterBuffer {
 	}
 }
 
-// Put queues a frame received from the network. data is copied.
-func (b *JitterBuffer) Put(ts uint32, data []byte) {
+// Put queues a frame received from the network, ms long. data is copied.
+func (b *JitterBuffer) Put(ts uint32, ms int, data []byte) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.stats.Received++
+	if ms <= 0 {
+		ms = int(b.frameMs)
+	}
 	if !b.started {
 		b.started = true
 		b.next = ts
@@ -98,7 +107,7 @@ func (b *JitterBuffer) Put(ts uint32, data []byte) {
 		b.stats.Late++ // duplicate
 		return
 	}
-	f := jbFrame{ts: ts, data: append([]byte(nil), data...)}
+	f := jbFrame{ts: ts, ms: uint32(ms), data: append([]byte(nil), data...)} //nolint:gosec // checked positive
 	b.frames = append(b.frames, jbFrame{})
 	copy(b.frames[i+1:], b.frames[i:])
 	b.frames[i] = f
@@ -124,7 +133,8 @@ func (b *JitterBuffer) span() uint32 {
 	if !b.playing {
 		from = b.frames[0].ts
 	}
-	return b.frames[len(b.frames)-1].ts + b.frameMs - from
+	last := b.frames[len(b.frames)-1]
+	return last.ts + last.ms - from
 }
 
 // Get returns the next frame to play, or nil when there is nothing to play
@@ -151,7 +161,7 @@ func (b *JitterBuffer) Get() (data []byte, lost bool) {
 	f := b.frames[0]
 	if int32(f.ts-b.next) <= int32(b.frameMs/2) { //nolint:gosec // small values
 		b.frames = b.frames[1:]
-		b.next = f.ts + b.frameMs
+		b.next = f.ts + f.ms
 		b.stats.Played++
 		return f.data, false
 	}

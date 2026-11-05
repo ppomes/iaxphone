@@ -44,7 +44,7 @@ Early skeleton. What exists today:
 - [x] registration (REGREQ / REGAUTH / REGACK), refresh and REGREL, verified against Asterisk 23
 - [x] outgoing calls (NEW / AUTHREQ / ACCEPT / ANSWER / HANGUP), voice in both directions, verified against Asterisk 23 (echo and tone tests)
 - [x] incoming calls (NEW / AUTHREQ / ACCEPT / RINGING / ANSWER), caller authentication, verified against Asterisk 23
-- [x] fixed-depth jitter buffer (adaptive depth and loss concealment later)
+- [x] fixed-depth jitter buffer, taking the peer's frame size as it comes (20, 30, 40 ms...); adaptive depth and loss concealment later
 - [x] sound I/O (miniaudio via malgo, cgo), verified against Asterisk 23 with the system devices
 - [x] DTMF (DTMF_BEGIN / DTMF_END both ways), verified against Asterisk 23
 - [x] Keypad tones: a key sounds while it is held, and is held on the wire as long
