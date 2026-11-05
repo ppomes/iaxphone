@@ -68,7 +68,7 @@ func run() error {
 		verbose  = flag.Bool("v", false, "log every full frame and the audio levels")
 	)
 	flag.Usage = func() {
-		fmt.Fprintf(flag.CommandLine.Output(), "usage: iaxphone [flags] register|call <number>|ping|devices\n\n")
+		fmt.Fprint(flag.CommandLine.Output(), "usage: iaxphone [flags] register|call <number>|ping|devices\n\n")
 		flag.PrintDefaults()
 	}
 	flag.Parse()

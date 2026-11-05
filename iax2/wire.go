@@ -32,12 +32,12 @@ import (
 // information, so the result is in time.Local.
 func DecodeDateTime(v uint32) time.Time {
 	sec := int(v&0x1F) << 1
-	min := int(v>>5) & 0x3F
+	minute := int(v>>5) & 0x3F
 	hour := int(v>>11) & 0x1F
 	day := int(v>>16) & 0x1F
 	month := time.Month(int(v>>21) & 0x0F)
 	year := 2000 + int(v>>25)
-	return time.Date(year, month, day, hour, min, sec, 0, time.Local)
+	return time.Date(year, month, day, hour, minute, sec, 0, time.Local)
 }
 
 // EncodeDateTime is the inverse of DecodeDateTime.

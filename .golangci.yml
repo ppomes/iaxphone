@@ -8,3 +8,10 @@ linters:
     - unused
     - misspell
     - revive
+  settings:
+    errcheck:
+      # Writing usage and diagnostics to a stream has no error worth handling.
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
