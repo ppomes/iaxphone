@@ -52,7 +52,7 @@ Early skeleton. What exists today:
 - [ ] AES-128 frame encryption
 - [ ] Opus (cgo, libopus)
 - [x] `phone` controller package (events, dial/answer/hangup/mute) shared by the UIs
-- [x] GUI (Fyne): dial, answer, hang up, keypad/DTMF, mute, level meters, settings
+- [x] GUI (Fyne): dial, answer, hang up, keypad/DTMF, mute, level meters, settings, status icon, single instance
 - [x] ring and ringback tones (generated locally, IAX2 carries no audio before the answer), device selection
 
 ## Building
@@ -71,8 +71,18 @@ the DTMF), Call / Answer / Hang up, mute, peak level meters and the keys
 received. The gear opens the settings (server, account, caller id,
 registration, jitter, sound, microphone and speaker), stored in Fyne's
 preferences for the app id
-`com.github.ppomes.iaxphone`, secret included, in clear. The window is
-tested on Fyne's test driver against the fake server, see
+`com.github.ppomes.iaxphone`, secret included, in clear.
+
+On a desktop with a status area (the StatusNotifierItem protocol: GNOME
+with the AppIndicator extension, KDE, Xfce...) the phone also sits in it
+as a handset whose colour is the state: grey not connected, blue ready,
+orange ringing, green in a call. Closing the window hides it behind the
+icon, where the phone keeps taking calls; the icon's menu shows the
+window, answers, hangs up or quits, and an incoming call brings the
+window back. Only one `iaxphone-gui` runs per user: a second one shows
+the window of the first and exits (a socket in `$XDG_RUNTIME_DIR`).
+
+The window is tested on Fyne's test driver against the fake server, see
 `cmd/iaxphone-gui/ui_test.go`.
 
 ## Debian packages

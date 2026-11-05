@@ -50,7 +50,9 @@ type gui struct {
 	phone    *phone.Phone
 	devices  func() ([]audio.DeviceInfo, error) // for the settings; listDevices
 	form     *settingsForm                      // the open settings form, if any
+	tray     *tray                              // the status icon, nil without one
 
+	reg      phone.RegInfo
 	call     phone.CallInfo
 	inCall   bool
 	keysIn   string // DTMF received during the call
@@ -164,6 +166,7 @@ func (g *gui) updateButtons() {
 	for _, b := range g.keypad {
 		setEnabled(b, ready && (!g.inCall || g.call.State == phone.CallActive))
 	}
+	g.updateTray()
 }
 
 func setEnabled(w fyne.Disableable, on bool) {
@@ -185,6 +188,9 @@ func (g *gui) handle(ev phone.Event) {
 		g.keys.SetText("")
 		g.callStatus.SetText(fmt.Sprintf("Incoming call from %s", callerText(ev.Call)))
 		g.app.SendNotification(fyne.NewNotification("iaxphone", "Incoming call from "+callerText(ev.Call)))
+		if g.tray != nil {
+			g.showWindow() // it may be hidden behind the icon
+		}
 	case phone.EventDialing:
 		g.inCall, g.call = true, ev.Call
 		g.keysIn, g.keysOut = "", ""
@@ -208,6 +214,7 @@ func (g *gui) handle(ev phone.Event) {
 }
 
 func (g *gui) setRegistration(r phone.RegInfo) {
+	g.reg = r
 	switch {
 	case g.phone == nil:
 		g.regStatus.SetText("Not connected")
@@ -220,6 +227,7 @@ func (g *gui) setRegistration(r phone.RegInfo) {
 	default:
 		g.regStatus.SetText("Registering at " + g.settings.Server + "…")
 	}
+	g.updateTray()
 }
 
 // refresh updates the live parts: meters and talk time.

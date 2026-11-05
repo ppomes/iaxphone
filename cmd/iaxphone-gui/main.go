@@ -25,6 +25,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"strings"
@@ -44,6 +46,17 @@ func main() {
 	a := app.NewWithID(appID)
 	g := newGUI(a, log)
 	g.win.Resize(fyne.NewSize(340, 560))
+	lock, err := claimInstance(instanceSocket(), func() { fyne.Do(g.showWindow) })
+	if errors.Is(err, errAlreadyRunning) {
+		fmt.Fprintln(os.Stderr, "iaxphone-gui is already running, showing its window")
+		return
+	}
+	if err != nil {
+		log.Warn("single instance", "err", err) // run anyway
+	} else {
+		defer func() { _ = lock.Close() }()
+	}
+	g.setupTray()
 	g.start()
 	go g.tick()
 	g.win.ShowAndRun()

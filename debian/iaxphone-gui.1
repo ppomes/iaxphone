@@ -21,6 +21,19 @@ the microphone and speaker to use. They are stored in Fyne's preferences
 under
 .IR ~/.config/fyne/com.github.ppomes.iaxphone/ ,
 the secret included, in clear.
+.PP
+On a desktop with a status area (StatusNotifierItem: GNOME with the
+AppIndicator extension, KDE, Xfce...) a handset icon shows the state, grey
+when not connected, blue when ready, orange while ringing, green in a
+call. Closing the window then hides it behind the icon, where the phone
+keeps taking calls; the icon's menu shows the window, answers, hangs up
+or quits, and an incoming call brings the window back.
+.PP
+Only one
+.B iaxphone\-gui
+runs per user: starting a second one shows the window of the first and
+exits. They meet on a socket in
+.IR $XDG_RUNTIME_DIR .
 .SH SEE ALSO
 .BR iaxphone (1)
 .SH AUTHOR

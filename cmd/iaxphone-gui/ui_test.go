@@ -72,6 +72,9 @@ func TestWindowDrivesCalls(t *testing.T) {
 	if !g.callBtn.Disabled() || g.regStatus.Text != "Not connected" {
 		t.Errorf("before connect: call enabled=%v status %q", !g.callBtn.Disabled(), g.regStatus.Text)
 	}
+	if g.tray != nil || g.trayStateNow() != trayOffline {
+		t.Errorf("before connect: tray %v state %v", g.tray, g.trayStateNow())
+	}
 	p, err := g.connect()
 	if err != nil {
 		t.Fatal(err)
@@ -88,6 +91,9 @@ func TestWindowDrivesCalls(t *testing.T) {
 	if g.callBtn.Disabled() || !g.hangupBtn.Disabled() || !g.answerBtn.Disabled() || !g.mute.Disabled() {
 		t.Error("idle: wrong buttons")
 	}
+	if g.trayStateNow() != trayIdle {
+		t.Errorf("idle: tray state %v", g.trayStateNow())
+	}
 
 	// Outgoing call: keypad fills the number, Call dials, keypad then
 	// sends DTMF, the peer's keys are shown, Hang up ends it.
@@ -100,6 +106,9 @@ func TestWindowDrivesCalls(t *testing.T) {
 	pump(t, g, p, "call up", hasText(g.callStatus, "In call with 600 · ulaw · 0:0"))
 	if !g.callBtn.Disabled() || g.hangupBtn.Disabled() || !g.answerBtn.Disabled() || g.mute.Disabled() {
 		t.Error("in call: wrong buttons")
+	}
+	if g.trayStateNow() != trayInCall {
+		t.Errorf("in call: tray state %v", g.trayStateNow())
 	}
 	// A key held with the mouse: DTMF_END waits for the release.
 	g.keypad[4].MouseDown(&desktop.MouseEvent{}) // "5"
@@ -137,6 +146,9 @@ func TestWindowDrivesCalls(t *testing.T) {
 	pump(t, g, p, "incoming", hasText(g.callStatus, "Incoming call from Asterisk <1001>"))
 	if g.answerBtn.Disabled() || g.hangupBtn.Disabled() || !g.callBtn.Disabled() || !g.keypad[0].Disabled() {
 		t.Error("ringing: wrong buttons")
+	}
+	if g.trayStateNow() != trayRinging {
+		t.Errorf("ringing: tray state %v", g.trayStateNow())
 	}
 	test.Tap(g.answerBtn)
 	pump(t, g, p, "answered", hasText(g.callStatus, "In call with Asterisk <1001>"))
