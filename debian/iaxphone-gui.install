@@ -1,0 +1,3 @@
+_build/iaxphone-gui usr/bin
+debian/iaxphone-gui.desktop usr/share/applications
+debian/iaxphone.svg usr/share/icons/hicolor/scalable/apps

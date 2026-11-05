@@ -1,0 +1,110 @@
+.TH IAXPHONE 1 "November 2026" "iaxphone 0.1.0" "User Commands"
+.SH NAME
+iaxphone \- IAX2 softphone for the command line
+.SH SYNOPSIS
+.B iaxphone
+[\fIoptions\fR]
+.B register
+.br
+.B iaxphone
+[\fIoptions\fR]
+.B call
+.I number
+.br
+.B iaxphone
+[\fIoptions\fR]
+.B ping
+.br
+.B iaxphone devices
+.SH DESCRIPTION
+.B iaxphone
+speaks IAX2 (RFC 5456), the Inter-Asterisk eXchange protocol, to an
+Asterisk server or any other IAX2 peer. It places and takes calls in G.711
+u-law or A-law, sends and receives DTMF, rings locally and plays the audio
+on the system's sound devices.
+.PP
+.B register
+keeps a registration with the server and takes the calls it sends, answering
+each after the
+.B \-auto\-answer
+delay, until interrupted.
+.B call
+dials
+.I number
+and returns when the call ends.
+.B ping
+measures the round trip to the server.
+.B devices
+lists the sound devices, marking the defaults with a star; their names are
+what
+.B \-mic
+and
+.B \-speaker
+take.
+.SH OPTIONS
+.TP
+.BI \-server " host[:port]"
+IAX2 server (default 127.0.0.1, port 4569).
+.TP
+.BI \-user " name"
+.TQ
+.BI \-secret " secret"
+Our account on the server.
+.TP
+.BI \-callerid " number"
+.TQ
+.BI \-name " name"
+Caller id number and name sent on outgoing calls (default name: iaxphone).
+.TP
+.BI \-duration " time"
+Hang up this long after the answer, for example 30s (default: when the peer
+hangs up).
+.TP
+.BI \-auto\-answer " time"
+Ring this long before answering an incoming call (default 2s).
+.TP
+.BI \-audio " default|none"
+Use the system's sound devices, or send silence and discard the audio
+(default: default).
+.TP
+.BI \-mic " name"
+.TQ
+.BI \-speaker " name"
+Capture and playback devices by name, as listed by
+.BR devices ;
+empty for the system defaults.
+.TP
+.BI \-jitter " ms"
+Jitter buffer depth, 20 to 500 ms (default 60).
+.TP
+.BI \-dtmf " keys"
+Keys to press one second after the call is answered, from 0-9, *, # and
+A-D.
+.TP
+.BI \-hold " time"
+How long each
+.B \-dtmf
+key is held (default 100ms).
+.TP
+.B \-v
+Log every full frame and the audio levels once a second.
+.SH EXAMPLES
+Register with the server and take calls:
+.PP
+.nf
+.RS
+iaxphone \-server pbx \-user phone \-secret s3cret register
+.RE
+.fi
+.PP
+Call extension 603, hold the keys 1234 for 300 ms each once answered:
+.PP
+.nf
+.RS
+iaxphone \-server pbx \-user phone \-secret s3cret \-dtmf 1234 \-hold 300ms call 603
+.RE
+.fi
+.SH SEE ALSO
+.BR iaxphone\-gui (1)
+.SH AUTHOR
+Pierre POMES <pierre.pomes@gmail.com>

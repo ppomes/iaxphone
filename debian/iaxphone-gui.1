@@ -1,0 +1,27 @@
+.TH IAXPHONE-GUI 1 "November 2026" "iaxphone 0.1.0" "User Commands"
+.SH NAME
+iaxphone\-gui \- IAX2 softphone window
+.SH SYNOPSIS
+.B iaxphone\-gui
+.SH DESCRIPTION
+.B iaxphone\-gui
+is the window of
+.BR iaxphone (1):
+it registers with the IAX2 server, shows the registration and the current
+call, and offers a number entry, a keypad, Call, Answer and Hang up
+buttons, a mute box and peak level meters.
+.PP
+The keypad dials when idle and sends DTMF during a call; a key sounds for
+as long as it is held, 100 ms at least, and so is the DTMF held on the
+wire. Incoming calls ring on the speaker and show a desktop notification.
+.PP
+The gear button opens the settings: server, account, caller id,
+registration, jitter buffer depth, sound (default devices or none), and
+the microphone and speaker to use. They are stored in Fyne's preferences
+under
+.IR ~/.config/fyne/com.github.ppomes.iaxphone/ ,
+the secret included, in clear.
+.SH SEE ALSO
+.BR iaxphone (1)
+.SH AUTHOR
+Pierre POMES <pierre.pomes@gmail.com>

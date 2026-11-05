@@ -1,0 +1,53 @@
+Source: iaxphone
+Section: comm
+Priority: optional
+Maintainer: Pierre POMES <pierre.pomes@gmail.com>
+Build-Depends: debhelper-compat (= 13),
+               golang-go (>= 2:1.26~),
+               pkgconf,
+               libgl-dev,
+               libegl-dev,
+               libx11-dev,
+               libxcursor-dev,
+               libxi-dev,
+               libxinerama-dev,
+               libxrandr-dev,
+               libxxf86vm-dev,
+               libwayland-dev,
+               libxkbcommon-dev,
+               wayland-protocols
+Standards-Version: 4.7.0
+Homepage: https://github.com/ppomes/iaxphone
+Rules-Requires-Root: no
+
+Package: iaxphone
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Recommends: libpulse0 | libasound2t64 | libasound2
+Description: IAX2 softphone for the command line
+ iaxphone is a softphone speaking IAX2 (RFC 5456), the Inter-Asterisk
+ eXchange protocol of Asterisk, written in Go. It registers with a
+ server, places and takes calls in G.711 u-law/A-law, sends and receives
+ DTMF, rings locally, and uses the system's sound devices through
+ miniaudio (PulseAudio/PipeWire or ALSA).
+ .
+ This package contains the command line phone: register, call, ping and
+ devices commands, meant for scripts and for testing against Asterisk.
+
+Package: iaxphone-gui
+Architecture: any
+# GLFW loads the X11, Wayland and EGL libraries with dlopen, out of sight
+# of dpkg-shlibdeps.
+Depends: ${shlibs:Depends}, ${misc:Depends},
+         libx11-6, libxcursor1, libxi6, libxinerama1, libxrandr2, libxxf86vm1,
+         libxkbcommon0, libwayland-cursor0, libwayland-egl1, libegl1
+Recommends: libpulse0 | libasound2t64 | libasound2, libdecor-0-0
+Description: IAX2 softphone - window
+ iaxphone is a softphone speaking IAX2 (RFC 5456), the Inter-Asterisk
+ eXchange protocol of Asterisk, written in Go. It registers with a
+ server, places and takes calls in G.711 u-law/A-law, sends and receives
+ DTMF, rings locally, and uses the system's sound devices through
+ miniaudio (PulseAudio/PipeWire or ALSA).
+ .
+ This package contains the Fyne window: keypad, call controls, level
+ meters and a settings dialog, with a desktop entry.

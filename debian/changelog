@@ -1,0 +1,6 @@
+iaxphone (0.1.0-1) unstable; urgency=medium
+
+  * Initial packaging: the iaxphone command line softphone and the
+    iaxphone-gui window.
+
+ -- Pierre POMES <pierre.pomes@gmail.com>  Thu, 05 Nov 2026 00:30:00 -0500

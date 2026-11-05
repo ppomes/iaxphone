@@ -1,0 +1,40 @@
+#!/usr/bin/make -f
+
+include /usr/share/dpkg/pkg-info.mk
+include /usr/share/dpkg/buildflags.mk
+
+# The Go modules are vendored in the orig tarball: the build needs no
+# network and no toolchain download.
+export GOCACHE = $(CURDIR)/.gocache
+export GOPATH = $(CURDIR)/.gopath
+export GOFLAGS = -mod=vendor -trimpath -buildmode=pie
+export GOPROXY = off
+export GOTOOLCHAIN = local
+export CGO_CFLAGS = $(CFLAGS) $(CPPFLAGS)
+export CGO_LDFLAGS = $(LDFLAGS)
+
+BUILD = $(CURDIR)/_build
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	go build -o $(BUILD)/iaxphone ./cmd/iaxphone
+	go build -o $(BUILD)/iaxphone-gui ./cmd/iaxphone-gui
+
+override_dh_auto_test:
+ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
+	# The tests talk to a fake server on loopback and use a null sound
+	# device; the window runs on Fyne's test driver, no display needed.
+	go test ./...
+endif
+
+override_dh_auto_install:
+	# dh_install takes the files from _build, see debian/*.install.
+
+override_dh_dwz:
+	# Go binaries carry no DWARF dwz can compress.
+
+override_dh_auto_clean:
+	chmod -Rf u+w .gocache .gopath 2>/dev/null || true
+	rm -rf .gocache .gopath $(BUILD)

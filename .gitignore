@@ -1,0 +1,26 @@
+# Build outputs
+/bin/
+/dist/
+*.test
+*.out
+coverage.*
+
+# Captures
+*.pcap
+
+# Vendored modules: debian/make-orig-tarball.sh puts them in the orig
+# tarball, they do not belong in the tree.
+/vendor/
+
+# Leftovers of dpkg-buildpackage run in the tree
+/_build/
+/.gocache/
+/.gopath/
+/debian/.debhelper/
+/debian/files
+/debian/*.substvars
+/debian/*.debhelper.log
+/debian/debhelper-build-stamp
+/debian/iaxphone/
+/debian/iaxphone-gui/
+/debian/tmp/

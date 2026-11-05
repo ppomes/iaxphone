@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=iaxphone
+GenericName=IAX2 softphone
+Comment=Place and take IAX2 calls on an Asterisk server
+Exec=iaxphone-gui
+Icon=iaxphone
+Terminal=false
+Categories=Network;Telephony;
+Keywords=IAX2;Asterisk;VoIP;softphone;

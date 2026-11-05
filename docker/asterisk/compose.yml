@@ -1,0 +1,19 @@
+# Throwaway Asterisk for testing the softphone against chan_iax2.
+#
+#   make asterisk-up
+#   bin/iaxphone -server 127.0.0.1 -user phone -secret s3cret call 600
+#
+# Extensions: see extensions.conf; anything else gets the "not in service"
+# prompt. The image is andrius/asterisk plus the English core sounds, see
+# Dockerfile.
+services:
+  asterisk:
+    build: .
+    image: iaxphone-asterisk
+    container_name: iaxphone-asterisk
+    ports:
+      - "4569:4569/udp"
+    volumes:
+      - ./iax.conf:/etc/asterisk/iax.conf:ro
+      - ./extensions.conf:/etc/asterisk/extensions.conf:ro
+    restart: unless-stopped
