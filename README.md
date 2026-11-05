@@ -76,11 +76,12 @@ preferences for the app id
 On a desktop with a status area (the StatusNotifierItem protocol: GNOME
 with the AppIndicator extension, KDE, Xfce...) the phone also sits in it
 as a handset whose colour is the state: grey not connected, blue ready,
-orange ringing, green in a call. Closing the window hides it behind the
-icon, where the phone keeps taking calls; the icon's menu shows the
-window, answers, hangs up or quits, and an incoming call brings the
-window back. Only one `iaxphone-gui` runs per user: a second one shows
-the window of the first and exits (a socket in `$XDG_RUNTIME_DIR`).
+orange ringing, green in a call. There the phone starts behind its icon,
+with no window, and closing the window puts it back there while the phone
+keeps taking calls; the icon, its menu (show, answer, hang up, quit) and
+an incoming call bring the window up. Only one `iaxphone-gui` runs per
+user: a second one, say from the applications menu, shows the window of
+the first and exits (a socket in `$XDG_RUNTIME_DIR`).
 
 The window is tested on Fyne's test driver against the fake server, see
 `cmd/iaxphone-gui/ui_test.go`.

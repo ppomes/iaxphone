@@ -59,7 +59,14 @@ func main() {
 	g.setupTray()
 	g.start()
 	go g.tick()
-	g.win.ShowAndRun()
+	if g.tray != nil && g.settings.configured() {
+		// In the status area the phone starts behind its icon, with no
+		// window to take a place in the dock; the icon, its menu, an
+		// incoming call or a second iaxphone-gui bring the window up.
+		a.Run()
+	} else {
+		g.win.ShowAndRun()
+	}
 	g.stop()
 }
 
@@ -75,6 +82,11 @@ type settings struct {
 	Audio        string // "default" or "none"
 	Mic          string // capture device name, "" for the default
 	Speaker      string // playback device name, "" for the default
+}
+
+// configured reports whether there is an account to connect with.
+func (s settings) configured() bool {
+	return s.Server != "" && s.Username != ""
 }
 
 func loadSettings(p fyne.Preferences) settings {
@@ -137,7 +149,7 @@ func (s settings) phoneConfig(log *slog.Logger) phone.Config {
 // start creates the controller for the current settings and forwards its
 // events to the window. It runs on the UI goroutine.
 func (g *gui) start() {
-	if g.settings.Server == "" || g.settings.Username == "" {
+	if !g.settings.configured() {
 		g.showSettings()
 		return
 	}

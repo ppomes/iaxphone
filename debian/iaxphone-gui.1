@@ -25,14 +25,15 @@ the secret included, in clear.
 On a desktop with a status area (StatusNotifierItem: GNOME with the
 AppIndicator extension, KDE, Xfce...) a handset icon shows the state, grey
 when not connected, blue when ready, orange while ringing, green in a
-call. Closing the window then hides it behind the icon, where the phone
-keeps taking calls; the icon's menu shows the window, answers, hangs up
-or quits, and an incoming call brings the window back.
+call. There the phone starts behind its icon, with no window, and closing
+the window puts it back there while the phone keeps taking calls; the
+icon, its menu (show, answer, hang up, quit) and an incoming call bring
+the window up.
 .PP
 Only one
 .B iaxphone\-gui
-runs per user: starting a second one shows the window of the first and
-exits. They meet on a socket in
+runs per user: starting a second one, from the applications menu say,
+shows the window of the first and exits. They meet on a socket in
 .IR $XDG_RUNTIME_DIR .
 .SH SEE ALSO
 .BR iaxphone (1)

@@ -353,6 +353,7 @@ func (g *gui) hangup() {
 
 func (g *gui) showError(err error) {
 	g.log.Error("ui", "err", err)
+	g.win.Show() // it may be behind the status icon
 	dialog.ShowError(err, g.win)
 }
 
@@ -365,6 +366,7 @@ type settingsForm struct {
 
 // showSettings edits the settings and restarts the controller on save.
 func (g *gui) showSettings() {
+	g.win.Show() // it may be behind the status icon
 	f := g.newSettingsForm()
 	g.form = f
 	d := dialog.NewForm("Settings", "Save", "Cancel", f.items, func(ok bool) {
