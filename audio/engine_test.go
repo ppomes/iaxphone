@@ -269,10 +269,18 @@ func TestEngineCodecRate(t *testing.T) {
 
 	// A 1 kHz tone at 16 kHz: 20 cycles per frame, so the sample a quarter
 	// cycle in (4 samples) is at the peak and the half cycle one is 0.
-	eng.SetTone(NewTone([]float64{1000}, time.Second, 0, 0))
+	tone := NewTone([]float64{1000}, time.Second, 0, 0)
+	eng.SetTone(tone)
 	dev.playback(out)
 	if out[4] < 32000 || out[8] < -400 || out[8] > 400 {
 		t.Errorf("tone at 16 kHz: out[4] = %d, out[8] = %d", out[4], out[8])
+	}
+	// The caller's tone is untouched (still at SampleRate, never played) and
+	// may be set again while the copy plays.
+	eng.SetTone(tone)
+	dev.playback(out)
+	if tone.rate != SampleRate || tone.pos != 0 {
+		t.Errorf("caller's tone changed: rate %d, pos %d", tone.rate, tone.pos)
 	}
 	if err := eng.Stop(); err != nil {
 		t.Fatal(err)

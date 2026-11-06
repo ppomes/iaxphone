@@ -64,9 +64,11 @@ make build
 make test
 ```
 
-The sound device and Opus need cgo: `libopus-dev` for Opus (a binary
-built without it falls back to G.711), and the X11, Wayland and GL
-development packages listed in `debian/control` for the window.
+The sound device and Opus need cgo, and a cgo build needs `libopus-dev`
+(`pkg-config opus`) to compile. `CGO_ENABLED=0 go build ./cmd/iaxphone`
+builds the command line without either: no sound device (`-audio none`),
+G.711 only. The window needs the X11, Wayland and GL development packages
+listed in `debian/control`.
 
 ## The window
 

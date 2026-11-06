@@ -42,8 +42,8 @@ type Tone struct {
 }
 
 // NewTone returns a tone of the given frequencies, played on for on and
-// off for off (off == 0: continuous), at level dBFS peak. It is generated
-// at SampleRate until the engine playing it sets its own rate.
+// off for off (off == 0: continuous), at level dBFS peak, generated at
+// SampleRate (an Engine plays a copy at its own rate).
 func NewTone(freqs []float64, on, off time.Duration, dbfs float64) *Tone {
 	t := &Tone{
 		freqs:  freqs,
@@ -56,8 +56,8 @@ func NewTone(freqs []float64, on, off time.Duration, dbfs float64) *Tone {
 	return t
 }
 
-// setRate generates the tone at rate from now on. Not for a tone that is
-// being played.
+// setRate generates the tone at rate from its start. Not for a tone that
+// is being played.
 func (t *Tone) setRate(rate int) {
 	t.rate = rate
 	t.on = int(t.onFor.Seconds() * float64(rate))

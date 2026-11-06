@@ -142,11 +142,14 @@ var ErrSkipped = errors.New("audio: frame skipped")
 // SetTone plays tone instead of the peer's audio until SetTone(nil). The
 // peer's frames keep being received and are dropped by the jitter buffer as
 // late once the tone stops; a ring tone before the answer loses nothing.
-// The tone is generated at the engine's rate and must not be in use
-// elsewhere.
+// The engine plays its own copy of the tone, from its start and at the
+// engine's rate: the caller's tone is left alone and may be reused.
 func (e *Engine) SetTone(tone *Tone) {
 	if tone != nil {
-		tone.setRate(e.rate)
+		own := *tone
+		own.phases = make([]float64, len(own.freqs))
+		own.setRate(e.rate)
+		tone = &own
 	}
 	e.tone.Store(tone)
 }
