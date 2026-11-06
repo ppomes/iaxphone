@@ -519,3 +519,84 @@ func TestServerGoesDeaf(t *testing.T) {
 	}
 	next(t, p, EventAnswered)
 }
+
+// Hold stops our audio and tells the server, Unhold resumes; the peer's
+// hold and transfer request are reported; our transfer is followed by the
+// server's hangup.
+func TestHoldAndTransfer(t *testing.T) {
+	srv := fakeiax.New(t)
+	p := startPhone(t, srv, false)
+	if err := p.Hold(); !errors.Is(err, ErrNoCall) {
+		t.Errorf("Hold without a call: %v", err)
+	}
+	if err := p.Dial("600"); err != nil {
+		t.Fatal(err)
+	}
+	next(t, p, EventAnswered)
+	deadline := time.Now().Add(2 * time.Second)
+	for p.Stats().Sent < 3 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if err := p.Hold(); err != nil {
+		t.Fatal(err)
+	}
+	ev := next(t, p, EventHold)
+	if !ev.Call.OnHold || ev.Call.Held || ev.Call.State != CallActive {
+		t.Errorf("hold %+v", ev.Call)
+	}
+	if !srv.Held() {
+		t.Error("server not held")
+	}
+	time.Sleep(50 * time.Millisecond)
+	sent := p.Stats().Sent
+	time.Sleep(100 * time.Millisecond)
+	if got := p.Stats().Sent; got != sent {
+		t.Errorf("sent %d frames while on hold", got-sent)
+	}
+	if ci, _ := p.Call(); !ci.OnHold {
+		t.Errorf("Call() %+v", ci)
+	}
+	if err := p.Unhold(); err != nil {
+		t.Fatal(err)
+	}
+	ev = next(t, p, EventUnhold)
+	if ev.Call.OnHold || srv.Held() {
+		t.Errorf("unhold %+v, server held %v", ev.Call, srv.Held())
+	}
+	deadline = time.Now().Add(2 * time.Second)
+	for p.Stats().Sent == sent && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if p.Stats().Sent == sent {
+		t.Error("nothing sent after Unhold")
+	}
+
+	srv.Hold(true)
+	ev = next(t, p, EventHold)
+	if !ev.Call.Held || ev.Call.OnHold {
+		t.Errorf("held by the peer %+v", ev.Call)
+	}
+	srv.Hold(false)
+	if ev = next(t, p, EventUnhold); ev.Call.Held {
+		t.Errorf("unheld by the peer %+v", ev.Call)
+	}
+	srv.Transfer("777")
+	if ev = next(t, p, EventTransfer); ev.Number != "777" {
+		t.Errorf("transfer request %+v", ev)
+	}
+
+	if err := p.Transfer("601"); err != nil {
+		t.Fatal(err)
+	}
+	ev = next(t, p, EventEnded)
+	if ev.Call.TransferredTo != "601" || ev.Call.HungUpByUs || ev.Call.Err != nil || ev.Call.Cause != "Normal Clearing (16)" {
+		t.Errorf("ended %+v", ev.Call)
+	}
+	if got := srv.Transfers(); len(got) != 1 || got[0] != "601" {
+		t.Errorf("server saw transfers %q", got)
+	}
+	if err := p.Transfer("601"); !errors.Is(err, ErrNoCall) {
+		t.Errorf("Transfer without a call: %v", err)
+	}
+}

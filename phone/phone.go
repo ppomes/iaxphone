@@ -111,9 +111,13 @@ const (
 	EventAnswered                      // the call is up, either direction
 	EventEnded                         // the call is over; Event.Call has the cause and statistics
 	EventDTMF                          // the peer pressed a key (Event.Digit)
+	EventHold                          // the call went on hold, by us or by the peer (Event.Call.OnHold, Held)
+	EventUnhold                        // the call came back off hold
+	EventTransfer                      // the peer asks us to call Event.Number instead; the call then ends
 )
 
-var kindNames = [...]string{"?", "registration", "incoming", "dialing", "remote-ringing", "answered", "ended", "dtmf"}
+var kindNames = [...]string{"?", "registration", "incoming", "dialing", "remote-ringing", "answered", "ended", "dtmf",
+	"hold", "unhold", "transfer"}
 
 func (k Kind) String() string {
 	if int(k) < len(kindNames) {
@@ -128,6 +132,7 @@ type Event struct {
 	Registration RegInfo  // EventRegistration
 	Call         CallInfo // call events
 	Digit        byte     // EventDTMF: '0'-'9', '*', '#' or 'A'-'D'
+	Number       string   // EventTransfer: the number the peer asks us to call
 }
 
 // RegInfo is a snapshot of the registration.
@@ -147,12 +152,15 @@ type CallInfo struct {
 	State    CallState
 	Started  time.Time
 	Answered time.Time // zero until answered
+	OnHold   bool      // we put the peer on hold (Hold)
+	Held     bool      // the peer put us on hold
 
 	// Set in EventEnded.
-	HungUpByUs bool
-	Cause      string // the peer's hangup cause, or why the call failed
-	Err        error  // non-nil when the call failed (rejected, timeout...)
-	Stats      audio.Stats
+	HungUpByUs    bool
+	TransferredTo string // the number we transferred the call to (Transfer); the peer then hung up
+	Cause         string // the peer's hangup cause, or why the call failed
+	Err           error  // non-nil when the call failed (rejected, timeout...)
+	Stats         audio.Stats
 }
 
 // TalkTime is how long the call has been (or was) answered.
@@ -466,6 +474,71 @@ func (p *Phone) Hangup() error {
 	return call.Hangup(cause)
 }
 
+// active returns the current call when it is answered.
+func (p *Phone) active() (*activeCall, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	ac := p.cur
+	if ac == nil || ac.call == nil {
+		return nil, ErrNoCall
+	}
+	if ac.info.State != CallActive {
+		return nil, ErrNotActive
+	}
+	return ac, nil
+}
+
+// Hold puts the active call on hold: the peer stops sending its audio and
+// may play music to whoever is at the other end, and we send nothing. It
+// returns once the peer has acknowledged, with EventHold on the way.
+func (p *Phone) Hold() error {
+	ac, err := p.active()
+	if err != nil {
+		return err
+	}
+	if err := ac.call.Hold(); err != nil {
+		return err
+	}
+	p.mu.Lock()
+	ac.info.OnHold = true
+	p.mu.Unlock()
+	p.emit(Event{Kind: EventHold, Call: p.snapshot(ac)})
+	return nil
+}
+
+// Unhold takes the active call back off hold; EventUnhold follows.
+func (p *Phone) Unhold() error {
+	ac, err := p.active()
+	if err != nil {
+		return err
+	}
+	if err := ac.call.Unhold(); err != nil {
+		return err
+	}
+	p.mu.Lock()
+	ac.info.OnHold = false
+	p.mu.Unlock()
+	p.emit(Event{Kind: EventUnhold, Call: p.snapshot(ac)})
+	return nil
+}
+
+// Transfer sends whoever is at the other end of the active call to number
+// (a blind transfer) and returns once the server has acknowledged. The
+// server then ends our call: EventEnded follows, with TransferredTo set.
+func (p *Phone) Transfer(number string) error {
+	ac, err := p.active()
+	if err != nil {
+		return err
+	}
+	if err := ac.call.Transfer(number); err != nil {
+		return err
+	}
+	p.mu.Lock()
+	ac.info.TransferredTo = number
+	p.mu.Unlock()
+	return nil
+}
+
 // SendDTMF presses a key on the active call: '0'-'9', '*', '#' or 'A'-'D'.
 // It returns once the peer has acknowledged the key release, after
 // iax2.DTMFDuration, so a GUI should call it off its event loop. Digits
@@ -711,7 +784,10 @@ func (p *Phone) startAudio(ac *activeCall) error {
 		if call.State() != iax2.StateUp {
 			return audio.ErrSkipped
 		}
-		return call.SendVoice(payload)
+		if err := call.SendVoice(payload); !errors.Is(err, iax2.ErrOnHold) {
+			return err
+		}
+		return audio.ErrSkipped
 	})
 	engine.SetMuted(p.muted)
 	if err := engine.Start(); err != nil {
@@ -759,6 +835,17 @@ func (p *Phone) watch(ac *activeCall) {
 				p.emit(Event{Kind: EventAnswered, Call: p.snapshot(ac)})
 			case iax2.EventDTMF:
 				p.emit(Event{Kind: EventDTMF, Call: p.snapshot(ac), Digit: ev.Digit})
+			case iax2.EventHold, iax2.EventUnhold:
+				p.mu.Lock()
+				ac.info.Held = ev.Kind == iax2.EventHold
+				p.mu.Unlock()
+				kind := EventHold
+				if !ac.info.Held {
+					kind = EventUnhold
+				}
+				p.emit(Event{Kind: kind, Call: p.snapshot(ac)})
+			case iax2.EventTransfer:
+				p.emit(Event{Kind: EventTransfer, Call: p.snapshot(ac), Number: ev.Number})
 			case iax2.EventHangup:
 				p.mu.Lock()
 				ac.info.Cause = ev.Cause

@@ -21,6 +21,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -32,6 +33,7 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/driver/desktop"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -70,7 +72,9 @@ type gui struct {
 	callBtn    *widget.Button
 	answerBtn  *widget.Button
 	hangupBtn  *widget.Button
+	transfer   *widget.Button
 	mute       *widget.Check
+	hold       *widget.Check
 	micMeter   *widget.ProgressBar
 	spkMeter   *widget.ProgressBar
 	keys       *widget.Label
@@ -112,6 +116,8 @@ func (g *gui) build() {
 			g.phone.SetMuted(on)
 		}
 	})
+	g.hold = widget.NewCheck("Hold", g.setHold)
+	g.transfer = widget.NewButtonWithIcon("Transfer", theme.MailForwardIcon(), g.transferCall)
 
 	g.micMeter = widget.NewProgressBar()
 	g.micMeter.TextFormatter = func() string { return "" }
@@ -137,7 +143,7 @@ func (g *gui) build() {
 		g.number,
 		container.NewGridWithColumns(3, pad...),
 		container.NewGridWithColumns(3, g.callBtn, g.answerBtn, g.hangupBtn),
-		container.NewHBox(g.mute),
+		container.NewHBox(g.mute, g.hold, layout.NewSpacer(), g.transfer),
 		meters,
 		g.keys,
 		widget.NewSeparator(),
@@ -153,6 +159,7 @@ func (g *gui) reset() {
 	g.inCall = false
 	g.call = phone.CallInfo{}
 	g.keysIn, g.keysOut = "", ""
+	g.hold.SetChecked(false) // without a call, setHold does nothing
 	g.callStatus.SetText("Idle")
 	g.keys.SetText("")
 	g.details.SetText(g.lastCall)
@@ -167,7 +174,10 @@ func (g *gui) updateButtons() {
 	setEnabled(g.callBtn, ready && !g.inCall)
 	setEnabled(g.answerBtn, ready && g.inCall && g.call.State == phone.CallRinging && !g.call.Outgoing)
 	setEnabled(g.hangupBtn, ready && g.inCall)
-	setEnabled(g.mute, ready && g.inCall && g.call.State == phone.CallActive)
+	active := ready && g.inCall && g.call.State == phone.CallActive
+	setEnabled(g.mute, active)
+	setEnabled(g.hold, active)
+	setEnabled(g.transfer, active)
 	for _, b := range g.keypad {
 		setEnabled(b, ready && (!g.inCall || g.call.State == phone.CallActive))
 	}
@@ -211,6 +221,15 @@ func (g *gui) handle(ev phone.Event) {
 	case phone.EventDTMF:
 		g.keysIn += string(ev.Digit)
 		g.showKeys()
+	case phone.EventHold, phone.EventUnhold:
+		g.call = ev.Call
+		g.refresh()
+	case phone.EventTransfer:
+		// The server wants us to call this number instead; it ends the
+		// call next, so leave the number in the entry.
+		g.number.SetText(ev.Number)
+		g.number.CursorColumn = len(g.number.Text)
+		g.callStatus.SetText("Asked to call " + ev.Number + " instead")
 	case phone.EventEnded:
 		g.lastCall = endedText(ev.Call)
 		g.recordCall(ev.Call)
@@ -247,8 +266,15 @@ func (g *gui) refresh() {
 	in, out := g.phone.Levels()
 	g.micMeter.SetValue(meter(in))
 	g.spkMeter.SetValue(meter(out))
-	g.callStatus.SetText(fmt.Sprintf("In call with %s · %s · %s", callerText(g.call), g.call.Format,
-		talkTime(g.call.TalkTime(time.Now()))))
+	status := fmt.Sprintf("In call with %s · %s · %s", callerText(g.call), g.call.Format,
+		talkTime(g.call.TalkTime(time.Now())))
+	if g.call.OnHold {
+		status += " · on hold"
+	}
+	if g.call.Held {
+		status += " · held by the peer"
+	}
+	g.callStatus.SetText(status)
 }
 
 // meter maps a peak level in dBFS onto 0..1 over a 60 dB range.
@@ -283,9 +309,13 @@ func endedText(c phone.CallInfo) string {
 	if c.HungUpByUs {
 		by = "us"
 	}
+	how := fmt.Sprintf("ended by %s (%s)", by, c.Cause)
+	if c.TransferredTo != "" {
+		how = "transferred to " + c.TransferredTo
+	}
 	st := c.Stats
-	return fmt.Sprintf("%s ended by %s (%s), %s, talk time %s.\nSent %d, played %d, lost %d, late %d, underruns %d.",
-		direction, by, c.Cause, c.Format, talkTime(c.TalkTime(time.Now())),
+	return fmt.Sprintf("%s %s, %s, talk time %s.\nSent %d, played %d, lost %d, late %d, underruns %d.",
+		direction, how, c.Format, talkTime(c.TalkTime(time.Now())),
 		st.Sent, st.Played, st.Jitter.Lost, st.Jitter.Late, st.Jitter.Underruns)
 }
 
@@ -355,6 +385,44 @@ func (g *gui) hangup() {
 	if err := g.phone.Hangup(); err != nil {
 		g.showError(err)
 	}
+}
+
+// setHold puts the call on hold or takes it back, off the UI goroutine:
+// the controller waits for the server's acknowledgement.
+func (g *gui) setHold(on bool) {
+	if g.phone == nil || !g.inCall || g.call.State != phone.CallActive {
+		return
+	}
+	p := g.phone
+	go func() {
+		var err error
+		if on {
+			err = p.Hold()
+		} else {
+			err = p.Unhold()
+		}
+		if err != nil {
+			fyne.Do(func() { g.showError(err) })
+		}
+	}()
+}
+
+// transferCall sends the other party to the number in the entry.
+func (g *gui) transferCall() {
+	if g.phone == nil {
+		return
+	}
+	number := g.number.Text
+	if number == "" {
+		g.showError(errors.New("enter the number to transfer the call to"))
+		return
+	}
+	p := g.phone
+	go func() {
+		if err := p.Transfer(number); err != nil {
+			fyne.Do(func() { g.showError(err) })
+		}
+	}()
 }
 
 func (g *gui) showError(err error) {

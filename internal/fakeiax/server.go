@@ -21,7 +21,10 @@
 // Package fakeiax is the minimum of an IAX2 server for the tests of the
 // packages above iax2: no authentication, REGREQ and REGREL get a REGACK,
 // NEW gets ACCEPT, RINGING, ANSWER and one voice frame, HANGUP, CONTROL and DTMF
-// frames get an ACK. It can also originate a call, press keys and hang up.
+// frames get an ACK, QUELCH and UNQUELCH put the call on and off hold, and
+// TRANSFER is followed by a HANGUP, as Asterisk hangs up on the party that
+// transferred a call. It can also originate a call, press keys, hold, ask
+// for a transfer and hang up.
 //
 // Like chan_iax2 it keeps sequence numbers, acknowledges again a frame it
 // has already processed (the client retransmitting because the ACK was
@@ -49,7 +52,9 @@ type Server struct {
 	mu      sync.Mutex
 	regs    int // REGREQ seen
 	hangups []string
-	digits  string // DTMF_END digits received
+	digits  string   // DTMF_END digits received
+	held    bool     // between QUELCH and UNQUELCH
+	xfers   []string // CALLED_NUMBER of every TRANSFER received
 	client  *net.UDPAddr
 	callNo  uint16               // last call number handed out
 	calls   map[uint16]*fakeCall // by the client's call number
@@ -223,6 +228,19 @@ func (s *Server) loop() {
 				Type: iax2.FrameVoice, Subclass: uint64(iax2.FormatULAW), Data: make([]byte, 160)})
 		case iax2.IAXAccept, iax2.IAXReject:
 			ack()
+		case iax2.IAXQuelch, iax2.IAXUnquelch:
+			s.mu.Lock()
+			s.held = iax2.IAXSubclass(full.Subclass) == iax2.IAXQuelch
+			s.mu.Unlock()
+			ack()
+		case iax2.IAXTransfer:
+			ies, _ := full.IEs()
+			s.mu.Lock()
+			s.xfers = append(s.xfers, ies.String(iax2.IECalledNumber))
+			s.mu.Unlock()
+			ack()
+			next(iax2.FrameIAX, uint64(iax2.IAXHangup), full.Timestamp+10,
+				iax2.IEs{iax2.StringIE(iax2.IECause, "Normal Clearing"), iax2.Uint8IE(iax2.IECauseCode, iax2.CauseNormalClearing)})
 		case iax2.IAXHangup:
 			ies, _ := full.IEs()
 			s.mu.Lock()
@@ -294,6 +312,22 @@ func (s *Server) PressKey(digit byte) {
 	s.sendSeq(iax2.FrameDTMFEnd, uint64(digit), 400, nil)
 }
 
+// Hold puts the client on hold (QUELCH) or takes it back (UNQUELCH).
+func (s *Server) Hold(on bool) {
+	if on {
+		s.sendSeq(iax2.FrameIAX, uint64(iax2.IAXQuelch), 500, nil)
+		return
+	}
+	s.sendSeq(iax2.FrameIAX, uint64(iax2.IAXUnquelch), 600, nil)
+}
+
+// Transfer asks the client to call number instead (TRANSFER), as the
+// Transfer() dialplan application does.
+func (s *Server) Transfer(number string) {
+	data, _ := (iax2.IEs{iax2.StringIE(iax2.IECalledNumber, number)}).Encode()
+	s.sendSeq(iax2.FrameIAX, uint64(iax2.IAXTransfer), 700, data)
+}
+
 // Lossy makes the server drop the first copy of every sequenced frame the
 // client sends, as a bad link would: only the retransmissions get through.
 func (s *Server) Lossy(on bool) {
@@ -355,6 +389,20 @@ func (s *Server) Registrations() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.regs
+}
+
+// Held reports whether the client put the server on hold.
+func (s *Server) Held() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.held
+}
+
+// Transfers returns the number of every TRANSFER received.
+func (s *Server) Transfers() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.xfers...)
 }
 
 // Digits returns the DTMF keys received so far.

@@ -204,7 +204,7 @@ func (s *fakeServer) loop() {
 				secret = "wrong"
 			}
 			reply(IAXAuthRep, 1, IEs{StringIE(IEMD5Result, MD5Response(ies.String(IEChallenge), secret))})
-		case IAXAccept, IAXReject, IAXPong, IAXLagRp:
+		case IAXAccept, IAXReject, IAXPong, IAXLagRp, IAXQuelch, IAXUnquelch, IAXTransfer:
 			reply(IAXAck, full.ISeqno, nil)
 		case IAXPoke:
 			reply(IAXPong, 0, nil)
