@@ -62,6 +62,7 @@ func run() error {
 		mic      = flag.String("mic", "", "capture device name (see devices; empty: system default)")
 		speaker  = flag.String("speaker", "", "playback device name (see devices; empty: system default)")
 		jitter   = flag.Int("jitter", audio.DefaultJitterMs, "jitter buffer depth in ms")
+		codecs   = flag.String("codec", codecNames(phone.SupportedCodecs()), "codecs to accept, best first, comma separated")
 		answer   = flag.Duration("auto-answer", 2*time.Second, "ring this long before answering an incoming call")
 		dtmf     = flag.String("dtmf", "", "keys to press one second after the call is answered")
 		hold     = flag.Duration("hold", iax2.DTMFDuration, "how long each -dtmf key is held")
@@ -78,6 +79,14 @@ func run() error {
 		if !iax2.ValidDigit((*dtmf)[i]) {
 			return fmt.Errorf("-dtmf: %q is not a DTMF key", (*dtmf)[i])
 		}
+	}
+	var codecList []iax2.Format
+	for name := range strings.SplitSeq(*codecs, ",") {
+		f, err := iax2.ParseFormat(strings.TrimSpace(name))
+		if err != nil {
+			return fmt.Errorf("-codec: %w", err)
+		}
+		codecList = append(codecList, f)
 	}
 
 	level := slog.LevelInfo
@@ -121,6 +130,7 @@ func run() error {
 		Register:     cmd == "register",
 		OpenDevice:   openDevice,
 		JitterMs:     *jitter,
+		Codecs:       codecList,
 		Logger:       log,
 	})
 	if err := p.Start(ctx); err != nil {
@@ -367,6 +377,15 @@ func ping(ctx context.Context, log *slog.Logger, server string) error {
 	}
 	fmt.Printf("pong in %s\n", rtt)
 	return nil
+}
+
+// codecNames joins the names of codecs with commas, the -codec syntax.
+func codecNames(codecs []iax2.Format) string {
+	names := make([]string, len(codecs))
+	for i, f := range codecs {
+		names[i] = f.String()
+	}
+	return strings.Join(names, ",")
 }
 
 // openMalgo opens miniaudio on the named devices ("" for the defaults).

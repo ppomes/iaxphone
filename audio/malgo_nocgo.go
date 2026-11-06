@@ -40,7 +40,7 @@ func (*Malgo) Devices() ([]DeviceInfo, error) { return nil, ErrNoCgo }
 func (*Malgo) Select(string, string) error { return ErrNoCgo }
 
 // Start returns ErrNoCgo.
-func (*Malgo) Start(func([]int16), func([]int16)) error { return ErrNoCgo }
+func (*Malgo) Start(int, func([]int16), func([]int16)) error { return ErrNoCgo }
 
 // Close does nothing.
 func (*Malgo) Close() error { return nil }

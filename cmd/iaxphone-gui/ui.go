@@ -496,6 +496,8 @@ func (g *gui) newSettingsForm() *settingsForm {
 		}
 		return nil
 	}
+	codec := widget.NewSelect(codecNames(), nil)
+	codec.SetSelected(s.Codec)
 	sound := widget.NewSelect([]string{"default", "none"}, nil)
 	sound.SetSelected(s.Audio)
 	mics, speakers := g.deviceNames()
@@ -512,6 +514,7 @@ func (g *gui) newSettingsForm() *settingsForm {
 		widget.NewFormItem("Caller name", name),
 		widget.NewFormItem("Register", register),
 		widget.NewFormItem("Jitter (ms)", jitter),
+		widget.NewFormItem("Codec", codec),
 		widget.NewFormItem("Sound", sound),
 		widget.NewFormItem("Microphone", mic),
 		widget.NewFormItem("Speaker", speaker),
@@ -521,7 +524,7 @@ func (g *gui) newSettingsForm() *settingsForm {
 		return settings{
 			Server: server.Text, Username: user.Text, Secret: secret.Text,
 			CallerNumber: cid.Text, CallerName: name.Text, Register: register.Checked,
-			JitterMs: ms, Audio: sound.Selected,
+			JitterMs: ms, Codec: codec.Selected, Audio: sound.Selected,
 			Mic: fromDefault(mic.Selected), Speaker: fromDefault(speaker.Selected),
 		}
 	}

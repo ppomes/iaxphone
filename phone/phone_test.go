@@ -640,3 +640,86 @@ func TestHoldAndTransfer(t *testing.T) {
 		t.Errorf("Transfer without a call: %v", err)
 	}
 }
+
+// The codec list: an unsupported codec is refused at Start, the server's
+// choice is taken when we accept it and refused otherwise.
+func TestCodecs(t *testing.T) {
+	srv := fakeiax.New(t)
+	p := New(Config{Server: srv.Addr(), LocalAddr: "127.0.0.1:0", Username: "phone",
+		Codecs:     []iax2.Format{iax2.FormatG729},
+		OpenDevice: func() (audio.Device, error) { return &audio.NullDevice{}, nil }})
+	if err := p.Start(context.Background()); !errors.Is(err, ErrCodec) {
+		t.Fatalf("Start with g729: %v", err)
+	}
+	p = New(Config{Server: srv.Addr(), LocalAddr: "127.0.0.1:0", Username: "phone",
+		Codecs:     []iax2.Format{iax2.FormatALAW},
+		OpenDevice: func() (audio.Device, error) { return &audio.NullDevice{}, nil }})
+	if err := p.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { p.Close() }) //nolint:errcheck
+	// The server speaks ulaw only and accepts with it: the call fails.
+	if err := p.Dial("600"); err != nil {
+		t.Fatal(err)
+	}
+	if ev := next(t, p, EventEnded); ev.Call.Err == nil || !strings.Contains(ev.Call.Err.Error(), "not in our capability") {
+		t.Errorf("alaw only against a ulaw server: %+v", ev.Call)
+	}
+	srv.SetFormat(iax2.FormatALAW)
+	if err := p.Dial("600"); err != nil {
+		t.Fatal(err)
+	}
+	if ev := next(t, p, EventAnswered); ev.Call.Format != iax2.FormatALAW {
+		t.Errorf("answered %+v", ev.Call)
+	}
+	if err := p.Hangup(); err != nil {
+		t.Fatal(err)
+	}
+	next(t, p, EventEnded)
+}
+
+// An Opus call, both ways: the default codec list prefers it, the engine
+// runs at 48 kHz and audio flows.
+func TestOpusCall(t *testing.T) {
+	if !audio.OpusAvailable {
+		t.Skip("built without cgo")
+	}
+	if codecs := SupportedCodecs(); codecs[0] != iax2.FormatOpus {
+		t.Fatalf("supported codecs %v", codecs)
+	}
+	srv := fakeiax.New(t)
+	srv.SetFormat(iax2.FormatOpus)
+	p := startPhone(t, srv, true)
+	if err := p.Dial("600"); err != nil {
+		t.Fatal(err)
+	}
+	if ev := next(t, p, EventAnswered); ev.Call.Format != iax2.FormatOpus {
+		t.Errorf("answered %+v", ev.Call)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for p.Stats().Sent < 3 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if st := p.Stats(); st.Sent < 3 || st.SendErrors != 0 {
+		t.Errorf("stats %+v", st)
+	}
+	if err := p.Hangup(); err != nil {
+		t.Fatal(err)
+	}
+	next(t, p, EventEnded)
+
+	srv.Originate(p.LocalAddr())
+	if ev := next(t, p, EventIncoming); ev.Call.Format != iax2.FormatOpus {
+		t.Errorf("incoming %+v", ev.Call)
+	}
+	if err := p.Answer(); err != nil {
+		t.Fatal(err)
+	}
+	if ev := next(t, p, EventAnswered); ev.Call.Format != iax2.FormatOpus {
+		t.Errorf("answered %+v", ev.Call)
+	}
+	if err := p.Hangup(); err != nil {
+		t.Fatal(err)
+	}
+	next(t, p, EventEnded)
+}

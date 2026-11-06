@@ -77,6 +77,11 @@ empty for the system defaults.
 .BI \-jitter " ms"
 Jitter buffer depth, 20 to 500 ms (default 60).
 .TP
+.BI \-codec " list"
+Codecs to accept, best first, comma separated: opus, ulaw, alaw (default
+all three, opus first, when built with libopus; ulaw,alaw otherwise). The
+first one is asked for; the server has the last word.
+.TP
 .BI \-dtmf " keys"
 Keys to press one second after the call is answered, from 0-9, *, # and
 A-D.

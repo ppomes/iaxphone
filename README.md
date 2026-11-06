@@ -21,7 +21,7 @@ builds it; the CLI does not need any of that.
 
 ```
 iax2/              protocol library: framing, information elements, calls, client
-audio/             G.711, jitter buffer, sound devices (miniaudio), audio engine
+audio/             G.711, Opus (libopus), jitter buffer, sound devices (miniaudio), audio engine
 phone/             softphone controller: registration, one call, audio bridged; what UIs drive
 history/           the call history file
 cmd/iaxphone/      CLI client
@@ -39,19 +39,20 @@ Early skeleton. What exists today:
 - [x] 16-bit mini-frame timestamp expansion (rollover handling)
 - [x] MD5 challenge/response
 - [x] G.711 µ-law and A-law
+- [x] codec negotiation (CAPABILITY / FORMAT, 64-bit CAPABILITY2 / FORMAT2), the audio engine runs at the codec's sample rate
 - [x] UDP transport, POKE/PONG liveness check (`iaxphone ping`), verified against Asterisk 23
 - [x] reliable full frames: every sequenced frame is retransmitted until acknowledged (1 s apart, 4 attempts, then the call ends with "no reply"), repeats are acknowledged again and dropped, a gap asks for the missing frames with VNAK and a VNAK from the peer is answered, frames for unknown calls get INVAL; verified against Asterisk 23 through a relay losing 40 % of the full frames
 - [x] registration (REGREQ / REGAUTH / REGACK), refresh and REGREL, verified against Asterisk 23
 - [x] outgoing calls (NEW / AUTHREQ / ACCEPT / ANSWER / HANGUP), voice in both directions, verified against Asterisk 23 (echo and tone tests)
 - [x] incoming calls (NEW / AUTHREQ / ACCEPT / RINGING / ANSWER), caller authentication, verified against Asterisk 23
-- [x] fixed-depth jitter buffer, taking the peer's frame size as it comes (20, 30, 40 ms...); adaptive depth and loss concealment later
+- [x] fixed-depth jitter buffer, taking the peer's frame size as it comes (20, 30, 40 ms...); adaptive depth later
 - [x] sound I/O (miniaudio via malgo, cgo), verified against Asterisk 23 with the system devices
 - [x] DTMF (DTMF_BEGIN / DTMF_END both ways), verified against Asterisk 23
 - [x] Keypad tones: a key sounds while it is held, and is held on the wire as long
 - [x] hold (QUELCH / UNQUELCH with MUSICONHOLD, both ways) and blind transfer (TRANSFER, both ways), verified against Asterisk 23
 - [x] call tokens (CALLTOKEN IE), answering the server's POKE (qualify=yes)
 - [ ] AES-128 frame encryption
-- [ ] Opus (cgo, libopus)
+- [x] Opus (cgo, libopus): 48 kHz, 32 kbit/s, loss concealment by the decoder; preferred when available, verified against Asterisk 23 (codec_opus)
 - [x] `phone` controller package (events, dial/answer/hangup/mute/hold/transfer) shared by the UIs
 - [x] GUI (Fyne): dial, answer, hang up, keypad/DTMF, mute, hold, transfer, level meters, settings, status icon, single instance, call history
 - [x] ring and ringback tones (generated locally, IAX2 carries no audio before the answer), device selection
@@ -63,6 +64,10 @@ make build
 make test
 ```
 
+The sound device and Opus need cgo: `libopus-dev` for Opus (a binary
+built without it falls back to G.711), and the X11, Wayland and GL
+development packages listed in `debian/control` for the window.
+
 ## The window
 
 `bin/iaxphone-gui` shows the registration state, the current call, a
@@ -71,7 +76,7 @@ call; a key sounds for as long as it is held, 100 ms at least, and so is
 the DTMF), Call / Answer / Hang up, mute, hold, peak level meters and the
 keys received. Transfer sends whoever is at the other end to the number in
 the entry (a blind transfer; the server then hangs up on us). The gear opens the settings (server, account, caller id,
-registration, jitter, sound, microphone and speaker), stored in Fyne's
+registration, jitter, codec, sound, microphone and speaker), stored in Fyne's
 preferences for the app id
 `com.github.ppomes.iaxphone`, secret included, in clear. The clock button
 opens the call history, newest first, with the missed calls marked and the
@@ -135,7 +140,9 @@ docker exec -it iaxphone-asterisk asterisk -rvvv
 The call uses the system's default sound devices (`iaxphone devices` lists
 them, `-mic` and `-speaker` pick others by name); `-audio none` sends silence
 instead, `-jitter` sets the playout delay
-in ms (default 60), and `-v` prints the peak capture and playback levels once
+in ms (default 60), `-codec` lists the codecs to accept, best first (default
+`opus,ulaw,alaw`; `-codec ulaw` forces G.711), and `-v` prints the peak
+capture and playback levels once
 a second along with every full frame. Wireshark dissects IAX2 natively, which
 is the quickest way to compare what the client sends with what `chan_iax2`
 expects.

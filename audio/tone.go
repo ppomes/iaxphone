@@ -33,21 +33,36 @@ type Tone struct {
 	freqs  []float64
 	phases []float64
 	amp    float64
+	onFor  time.Duration
+	offFor time.Duration
+	rate   int
 	on     int // samples
 	period int // samples, on + off
 	pos    int
 }
 
 // NewTone returns a tone of the given frequencies, played on for on and
-// off for off (off == 0: continuous), at level dBFS peak.
+// off for off (off == 0: continuous), at level dBFS peak. It is generated
+// at SampleRate until the engine playing it sets its own rate.
 func NewTone(freqs []float64, on, off time.Duration, dbfs float64) *Tone {
-	return &Tone{
+	t := &Tone{
 		freqs:  freqs,
 		phases: make([]float64, len(freqs)),
 		amp:    math.Pow(10, dbfs/20) * 32767 / float64(len(freqs)),
-		on:     int(on.Seconds() * SampleRate),
-		period: int((on + off).Seconds() * SampleRate),
+		onFor:  on,
+		offFor: off,
 	}
+	t.setRate(SampleRate)
+	return t
+}
+
+// setRate generates the tone at rate from now on. Not for a tone that is
+// being played.
+func (t *Tone) setRate(rate int) {
+	t.rate = rate
+	t.on = int(t.onFor.Seconds() * float64(rate))
+	t.period = int((t.onFor + t.offFor).Seconds() * float64(rate))
+	t.pos = 0
 }
 
 // RingTone is the North American ring and ringback tone: 440 Hz + 480 Hz,
@@ -82,7 +97,7 @@ func (t *Tone) Fill(pcm []int16) {
 			var v float64
 			for j, f := range t.freqs {
 				v += math.Sin(t.phases[j])
-				t.phases[j] += 2 * math.Pi * f / SampleRate
+				t.phases[j] += 2 * math.Pi * f / float64(t.rate)
 				if t.phases[j] > 2*math.Pi {
 					t.phases[j] -= 2 * math.Pi
 				}

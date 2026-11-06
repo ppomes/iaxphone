@@ -34,9 +34,9 @@ type Player struct {
 // NewPlayer wraps a device; Start opens it.
 func NewPlayer(dev Device) *Player { return &Player{dev: dev} }
 
-// Start starts the device; it plays silence until SetTone.
+// Start starts the device at SampleRate; it plays silence until SetTone.
 func (p *Player) Start() error {
-	return p.dev.Start(func([]int16) {}, p.onPlayback)
+	return p.dev.Start(SampleRate, func([]int16) {}, p.onPlayback)
 }
 
 // SetTone plays tone from now on, nil for silence.

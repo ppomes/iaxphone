@@ -33,6 +33,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"slices"
 	"sync"
 	"time"
 
@@ -195,6 +196,11 @@ type Config struct {
 	OpenDevice func() (audio.Device, error)
 	// JitterMs is the playout delay; 0 means audio.DefaultJitterMs.
 	JitterMs int
+	// Codecs are the codecs we accept, best first: the first one is what we
+	// ask for. nil means SupportedCodecs: Opus when the binary has it (cgo
+	// and libopus), then G.711 µ-law and A-law. Start fails on a codec this
+	// binary cannot handle.
+	Codecs []iax2.Format
 	// LocalAddr optionally binds the UDP socket.
 	LocalAddr string
 	Logger    *slog.Logger
@@ -253,6 +259,9 @@ func New(cfg Config) *Phone {
 	if cfg.JitterMs == 0 {
 		cfg.JitterMs = audio.DefaultJitterMs
 	}
+	if cfg.Codecs == nil {
+		cfg.Codecs = SupportedCodecs()
+	}
 	if cfg.OpenDevice == nil {
 		cfg.OpenDevice = func() (audio.Device, error) {
 			return audio.OpenMalgo(func(msg string) { cfg.Logger.Debug("miniaudio", "msg", msg) })
@@ -272,12 +281,24 @@ func (p *Phone) Start(ctx context.Context) error {
 	if p.client != nil || p.closed {
 		return errors.New("phone: already started")
 	}
+	var capability iax2.Format
+	for _, f := range p.cfg.Codecs {
+		if !slices.Contains(SupportedCodecs(), f) {
+			return fmt.Errorf("%w: %s", ErrCodec, f)
+		}
+		capability |= f
+	}
+	if capability == 0 {
+		return fmt.Errorf("%w: no codec configured", ErrCodec)
+	}
 	client, err := iax2.Dial(ctx, iax2.Config{
 		Server:       p.cfg.Server,
 		Username:     p.cfg.Username,
 		Secret:       p.cfg.Secret,
 		CallerNumber: p.cfg.CallerNumber,
 		CallerName:   p.cfg.CallerName,
+		Capability:   capability,
+		Preferred:    p.cfg.Codecs[0],
 		LocalAddr:    p.cfg.LocalAddr,
 		Logger:       p.log,
 	})
@@ -961,12 +982,28 @@ func (p *Phone) register() {
 	})
 }
 
+// SupportedCodecs lists the codecs this binary can handle, best first:
+// Opus when built with cgo and libopus, then G.711 µ-law and A-law.
+func SupportedCodecs() []iax2.Format {
+	codecs := []iax2.Format{iax2.FormatULAW, iax2.FormatALAW}
+	if audio.OpusAvailable {
+		codecs = append([]iax2.Format{iax2.FormatOpus}, codecs...)
+	}
+	return codecs
+}
+
 func codecFor(f iax2.Format) (audio.Codec, error) {
 	switch f {
 	case iax2.FormatULAW:
 		return audio.Ulaw{}, nil
 	case iax2.FormatALAW:
 		return audio.Alaw{}, nil
+	case iax2.FormatOpus:
+		codec, err := audio.NewOpus()
+		if err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrCodec, err)
+		}
+		return codec, nil
 	default:
 		return nil, fmt.Errorf("%w: %s", ErrCodec, f)
 	}

@@ -31,11 +31,44 @@ import (
 
 // fakeDevice lets the test drive the callbacks by hand.
 type fakeDevice struct {
+	rate              int
 	capture, playback func([]int16)
 }
 
-func (d *fakeDevice) Start(c, p func([]int16)) error { d.capture, d.playback = c, p; return nil }
-func (d *fakeDevice) Close() error                   { return nil }
+func (d *fakeDevice) Start(rate int, c, p func([]int16)) error {
+	d.rate, d.capture, d.playback = rate, c, p
+	return nil
+}
+func (d *fakeDevice) Close() error { return nil }
+
+// rawCodec is a 16 kHz codec that sends the samples as they are, little
+// endian, and conceals a lost frame with a constant.
+type rawCodec struct{ closed bool }
+
+func (c *rawCodec) Encode(dst []byte, pcm []int16) []byte {
+	for _, s := range pcm {
+		dst = append(dst, byte(s), byte(uint16(s)>>8)) //nolint:gosec // sample bits
+	}
+	return dst
+}
+
+func (c *rawCodec) Decode(dst []int16, data []byte) []int16 {
+	for i := 0; i+1 < len(data); i += 2 {
+		dst = append(dst, int16(uint16(data[i])|uint16(data[i+1])<<8)) //nolint:gosec // sample bits
+	}
+	return dst
+}
+
+func (c *rawCodec) Samples(data []byte) int { return len(data) / 2 }
+func (c *rawCodec) Rate() int               { return 16000 }
+func (c *rawCodec) Close() error            { c.closed = true; return nil }
+
+func (c *rawCodec) Conceal(dst []int16) []int16 {
+	for range FrameSamples(c.Rate()) {
+		dst = append(dst, 777)
+	}
+	return dst
+}
 
 func TestEngineCaptureToSend(t *testing.T) {
 	dev := &fakeDevice{}
@@ -50,18 +83,18 @@ func TestEngineCaptureToSend(t *testing.T) {
 	if err := eng.Start(); err != nil {
 		t.Fatal(err)
 	}
-	pcm := make([]int16, FrameSamples)
+	pcm := make([]int16, FrameSamples(SampleRate))
 	for i := range pcm {
 		pcm[i] = int16(8000 * math.Sin(2*math.Pi*1004*float64(i)/SampleRate))
 	}
 	dev.capture(pcm)
-	dev.capture(make([]int16, FrameSamples))
+	dev.capture(make([]int16, FrameSamples(SampleRate)))
 	if err := eng.Stop(); err != nil {
 		t.Fatal(err)
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(sent) != 2 || len(sent[0]) != FrameSamples {
+	if len(sent) != 2 || len(sent[0]) != FrameSamples(SampleRate) {
 		t.Fatalf("sent %d frames", len(sent))
 	}
 	st := eng.Stats()
@@ -81,7 +114,7 @@ func TestEngineReceiveToPlayback(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer eng.Stop() //nolint:errcheck
-	tone := make([]int16, FrameSamples)
+	tone := make([]int16, FrameSamples(SampleRate))
 	for i := range tone {
 		tone[i] = 12000
 	}
@@ -89,7 +122,7 @@ func TestEngineReceiveToPlayback(t *testing.T) {
 	eng.Receive(0, payload)
 	eng.Receive(20, payload)
 
-	out := make([]int16, FrameSamples)
+	out := make([]int16, FrameSamples(SampleRate))
 	dev.playback(out) // prebuffered (40 ms queued, depth 40) → plays
 	if out[0] < 11000 || out[0] > 13000 {
 		t.Fatalf("playback sample %d, want ≈12000", out[0])
@@ -103,7 +136,7 @@ func TestEngineReceiveToPlayback(t *testing.T) {
 	if st.Played != 2 || st.Silent != 1 || st.Jitter.Underruns != 1 {
 		t.Fatalf("stats %+v", st)
 	}
-	dev.capture(make([]int16, FrameSamples))
+	dev.capture(make([]int16, FrameSamples(SampleRate)))
 	deadline := time.Now().Add(time.Second)
 	for eng.Stats().SendErrors == 0 && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
@@ -139,7 +172,7 @@ func TestEngineTone(t *testing.T) {
 	}
 	defer eng.Stop() //nolint:errcheck
 	eng.SetTone(NewTone([]float64{1000}, time.Second, 0, -6))
-	out := make([]int16, FrameSamples)
+	out := make([]int16, FrameSamples(SampleRate))
 	dev.playback(out)
 	var peak int16
 	for _, v := range out {
@@ -176,7 +209,7 @@ func TestEngineLongFrames(t *testing.T) {
 	const frames = 4
 	var want []int16
 	for ts := uint32(0); ts < frames*40; ts += 40 {
-		pcm := make([]int16, 2*FrameSamples)
+		pcm := make([]int16, 2*FrameSamples(SampleRate))
 		for i := range pcm {
 			pcm[i] = int16(ts) * 50 //nolint:gosec // small
 		}
@@ -184,7 +217,7 @@ func TestEngineLongFrames(t *testing.T) {
 		eng.Receive(ts, Ulaw{}.Encode(nil, pcm))
 	}
 	var got []int16
-	out := make([]int16, FrameSamples)
+	out := make([]int16, FrameSamples(SampleRate))
 	for range 2 * frames {
 		dev.playback(out)
 		got = append(got, out...)
@@ -195,5 +228,56 @@ func TestEngineLongFrames(t *testing.T) {
 	st := eng.Stats()
 	if st.Played != 2*frames || st.Silent != 0 || st.Jitter.Lost != 0 || st.Jitter.Dropped != 0 || st.Jitter.Underruns != 0 {
 		t.Errorf("stats %+v", st)
+	}
+}
+
+// A codec at another rate: the device is started at it, frames are sized
+// for it, the jitter buffer times them right, a lost frame is concealed by
+// the codec, a tone is generated at that rate and Stop closes the codec.
+func TestEngineCodecRate(t *testing.T) {
+	dev := &fakeDevice{}
+	codec := &rawCodec{}
+	eng := NewEngine(dev, codec, 40, func([]byte) error { return nil })
+	if err := eng.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if dev.rate != 16000 {
+		t.Fatalf("device started at %d Hz", dev.rate)
+	}
+	frame := FrameSamples(16000)
+	if frame != 320 {
+		t.Fatalf("FrameSamples(16000) = %d", frame)
+	}
+	pcm := make([]int16, frame)
+	for i := range pcm {
+		pcm[i] = 1000
+	}
+	payload := codec.Encode(nil, pcm)
+	eng.Receive(0, payload)
+	eng.Receive(20, payload) // 40 ms queued: playout starts
+	eng.Receive(60, payload) // 40 is missing
+	out := make([]int16, frame)
+	for i, want := range []int16{1000, 1000, 777, 1000} {
+		dev.playback(out)
+		if out[0] != want || out[frame-1] != want {
+			t.Errorf("frame %d plays %d..%d, want %d", i, out[0], out[frame-1], want)
+		}
+	}
+	if st := eng.Stats(); st.Played != 4 || st.Jitter.Lost != 1 {
+		t.Errorf("stats %+v", st)
+	}
+
+	// A 1 kHz tone at 16 kHz: 20 cycles per frame, so the sample a quarter
+	// cycle in (4 samples) is at the peak and the half cycle one is 0.
+	eng.SetTone(NewTone([]float64{1000}, time.Second, 0, 0))
+	dev.playback(out)
+	if out[4] < 32000 || out[8] < -400 || out[8] > 400 {
+		t.Errorf("tone at 16 kHz: out[4] = %d, out[8] = %d", out[4], out[8])
+	}
+	if err := eng.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	if !codec.closed {
+		t.Error("Stop did not close the codec")
 	}
 }

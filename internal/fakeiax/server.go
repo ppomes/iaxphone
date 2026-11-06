@@ -63,6 +63,7 @@ type Server struct {
 	lossy     bool                 // drop the first copy of every sequenced frame
 	deaf      bool                 // ignore everything
 	unbridged bool                 // acknowledge TRANSFER but keep the call
+	format    iax2.Format          // the codec accepted and offered, 0: ulaw
 	dropped   map[string]bool      // frames dropped once (Lossy)
 	seen      map[string]bool      // sequenced frames processed, re-acked when repeated
 	retrans   int                  // retransmitted frames received
@@ -222,11 +223,17 @@ func (s *Server) loop() {
 				next(iax2.FrameIAX, uint64(iax2.IAXReject), full.Timestamp, iax2.IEs{iax2.StringIE(iax2.IECause, "No such extension")})
 				continue
 			}
-			next(iax2.FrameIAX, uint64(iax2.IAXAccept), full.Timestamp, iax2.IEs{iax2.Uint32IE(iax2.IEFormat, uint32(iax2.FormatULAW))})
+			format := s.Format()
+			next(iax2.FrameIAX, uint64(iax2.IAXAccept), full.Timestamp, iax2.IEs{
+				iax2.Uint32IE(iax2.IEFormat, uint32(format)), //nolint:gosec // low 32 bits of the mask
+				iax2.Format64IE(iax2.IEFormat2, format)})
 			next(iax2.FrameControl, uint64(iax2.ControlRinging), full.Timestamp, nil)
 			next(iax2.FrameControl, uint64(iax2.ControlAnswer), full.Timestamp, nil)
-			s.send(from, &iax2.FullFrame{SrcCall: fc.no, DstCall: full.SrcCall, Timestamp: 40, OSeqno: s.seq(fc, true), ISeqno: full.OSeqno + 1,
-				Type: iax2.FrameVoice, Subclass: uint64(iax2.FormatULAW), Data: make([]byte, 160)})
+			if format == iax2.FormatULAW || format == iax2.FormatALAW {
+				// A first frame of silence; other codecs would need encoding.
+				s.send(from, &iax2.FullFrame{SrcCall: fc.no, DstCall: full.SrcCall, Timestamp: 40, OSeqno: s.seq(fc, true), ISeqno: full.OSeqno + 1,
+					Type: iax2.FrameVoice, Subclass: uint64(format), Data: make([]byte, 160)})
+			}
 		case iax2.IAXAccept, iax2.IAXReject:
 			ack()
 		case iax2.IAXQuelch, iax2.IAXUnquelch:
@@ -283,8 +290,10 @@ func (s *Server) Originate(addr string) {
 		iax2.StringIE(iax2.IECalledNumber, "s"),
 		iax2.StringIE(iax2.IECallingNumber, "1001"),
 		iax2.StringIE(iax2.IECallingName, "Asterisk"),
-		iax2.Uint32IE(iax2.IEFormat, uint32(iax2.FormatULAW)),
-		iax2.Uint32IE(iax2.IECapability, uint32(iax2.FormatULAW)),
+		iax2.Uint32IE(iax2.IEFormat, uint32(s.Format())),     //nolint:gosec // low 32 bits of the mask
+		iax2.Uint32IE(iax2.IECapability, uint32(s.Format())), //nolint:gosec // low 32 bits of the mask
+		iax2.Format64IE(iax2.IEFormat2, s.Format()),
+		iax2.Format64IE(iax2.IECapability2, s.Format()),
 	}).Encode()
 	s.send(to, &iax2.FullFrame{SrcCall: no, Timestamp: 1, Type: iax2.FrameIAX, Subclass: uint64(iax2.IAXNew), Data: data})
 }
@@ -339,6 +348,26 @@ func (s *Server) Lossy(on bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.lossy = on
+}
+
+// SetFormat sets the one codec the server speaks: what it ACCEPTs an
+// outgoing call with, whatever the client asked for (as Asterisk does with
+// its default codecpriority=host), and what Originate offers. The default
+// is ulaw; the server only sends audio of its own in ulaw and alaw.
+func (s *Server) SetFormat(f iax2.Format) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.format = f
+}
+
+// Format returns the codec the server speaks.
+func (s *Server) Format() iax2.Format {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.format == 0 {
+		return iax2.FormatULAW
+	}
+	return s.format
 }
 
 // Unbridged makes the server acknowledge TRANSFER without acting on it,

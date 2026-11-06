@@ -22,6 +22,7 @@ package audio
 
 import (
 	"errors"
+	"io"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -36,6 +37,8 @@ import (
 type Engine struct {
 	dev   Device
 	codec Codec
+	rate  int // the codec's sample rate, the device runs at it too
+	frame int // samples per frame period at rate
 	jb    *JitterBuffer
 	send  func(payload []byte) error
 
@@ -64,15 +67,19 @@ type Stats struct {
 // longer burst is dropped (SendDropped).
 const sendQueue = 16
 
-// NewEngine builds an engine; depthMs is the jitter buffer depth.
+// NewEngine builds an engine running at the codec's sample rate; depthMs is
+// the jitter buffer depth. Stop closes the codec if it is an io.Closer.
 func NewEngine(dev Device, codec Codec, depthMs int, send func(payload []byte) error) *Engine {
+	frame := FrameSamples(codec.Rate())
 	return &Engine{
 		dev:   dev,
 		codec: codec,
-		jb:    NewJitterBuffer(depthMs, 1000*FrameSamples/SampleRate),
+		rate:  codec.Rate(),
+		frame: frame,
+		jb:    NewJitterBuffer(depthMs, int(FramePeriod/time.Millisecond)),
 		send:  send,
 		out:   make(chan []byte, sendQueue),
-		pcmQ:  make([]int16, 0, 4*FrameSamples),
+		pcmQ:  make([]int16, 0, 4*frame),
 	}
 }
 
@@ -101,7 +108,7 @@ func (e *Engine) Start() error {
 			}
 		}
 	}()
-	if err := e.dev.Start(e.onCapture, e.onPlayback); err != nil {
+	if err := e.dev.Start(e.rate, e.onCapture, e.onPlayback); err != nil {
 		close(e.out)
 		e.wg.Wait()
 		return err
@@ -111,7 +118,7 @@ func (e *Engine) Start() error {
 
 // Receive queues a frame from the network for playback.
 func (e *Engine) Receive(ts uint32, payload []byte) {
-	e.jb.Put(ts, e.codec.Samples(payload)*1000/SampleRate, payload)
+	e.jb.Put(ts, e.codec.Samples(payload)*1000/e.rate, payload)
 }
 
 // Stop stops the device and the sender; it is safe to call more than once.
@@ -122,6 +129,9 @@ func (e *Engine) Stop() error {
 	err := e.dev.Close()
 	close(e.out)
 	e.wg.Wait()
+	if c, ok := e.codec.(io.Closer); ok {
+		_ = c.Close()
+	}
 	return err
 }
 
@@ -132,7 +142,14 @@ var ErrSkipped = errors.New("audio: frame skipped")
 // SetTone plays tone instead of the peer's audio until SetTone(nil). The
 // peer's frames keep being received and are dropped by the jitter buffer as
 // late once the tone stops; a ring tone before the answer loses nothing.
-func (e *Engine) SetTone(tone *Tone) { e.tone.Store(tone) }
+// The tone is generated at the engine's rate and must not be in use
+// elsewhere.
+func (e *Engine) SetTone(tone *Tone) {
+	if tone != nil {
+		tone.setRate(e.rate)
+	}
+	e.tone.Store(tone)
+}
 
 // SetMuted replaces the captured audio with silence (the stream keeps
 // flowing so the peer's jitter buffer stays fed).
@@ -148,6 +165,9 @@ func (e *Engine) onCapture(pcm []int16) {
 		clear(pcm)
 	}
 	payload := e.codec.Encode(make([]byte, 0, len(pcm)), pcm)
+	if len(payload) == 0 {
+		return // the codec could not encode this frame
+	}
 	select {
 	case e.out <- payload:
 	default:
@@ -170,7 +190,11 @@ func (e *Engine) onPlayback(pcm []int16) {
 			if !lost {
 				break // nothing to play yet
 			}
-			e.pcmQ = append(e.pcmQ, make([]int16, FrameSamples)...) // a frame period of silence
+			if c, ok := e.codec.(Concealer); ok {
+				e.pcmQ = c.Conceal(e.pcmQ)
+			} else {
+				e.pcmQ = append(e.pcmQ, make([]int16, e.frame)...) // a frame period of silence
+			}
 			continue
 		}
 		e.pcmQ = e.codec.Decode(e.pcmQ, data)

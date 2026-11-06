@@ -214,6 +214,17 @@ var formatNames = map[Format]string{
 	FormatG719: "g719", FormatSpeex16: "speex16", FormatOpus: "opus",
 }
 
+// ParseFormat returns the codec called name, as String writes it ("ulaw",
+// "opus"...).
+func ParseFormat(name string) (Format, error) {
+	for f, n := range formatNames {
+		if n == name {
+			return f, nil
+		}
+	}
+	return 0, fmt.Errorf("iax2: unknown codec %q", name)
+}
+
 func (f Format) String() string {
 	if n, ok := formatNames[f]; ok {
 		return n

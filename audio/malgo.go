@@ -33,7 +33,7 @@ import (
 
 // Malgo is a Device on the default sound devices of the system, through
 // miniaudio (PulseAudio, PipeWire, ALSA, CoreAudio, WASAPI...). miniaudio
-// resamples between the device's native rate and SampleRate.
+// resamples between the device's native rate and the rate Start asks for.
 type Malgo struct {
 	ctx *malgo.AllocatedContext
 	dev *malgo.Device
@@ -56,7 +56,7 @@ func OpenMalgo(logf func(string)) (*Malgo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("audio: init context: %w", err)
 	}
-	return &Malgo{ctx: ctx, frame: make([]int16, FrameSamples)}, nil
+	return &Malgo{ctx: ctx}, nil
 }
 
 // Devices lists the capture and playback devices.
@@ -115,14 +115,17 @@ func (m *Malgo) Select(capture, playback string) error {
 }
 
 // Start implements Device.
-func (m *Malgo) Start(capture, playback func([]int16)) error {
+func (m *Malgo) Start(rate int, capture, playback func([]int16)) error {
+	frame := FrameSamples(rate)
 	m.mu.Lock()
 	m.capture, m.playback = capture, playback
+	m.frame = make([]int16, frame)
+	m.inAcc, m.outRest = nil, nil
 	m.mu.Unlock()
 
 	cfg := malgo.DefaultDeviceConfig(malgo.Duplex)
-	cfg.SampleRate = SampleRate
-	cfg.PeriodSizeInFrames = FrameSamples
+	cfg.SampleRate = uint32(rate)          //nolint:gosec // a sample rate
+	cfg.PeriodSizeInFrames = uint32(frame) //nolint:gosec // a frame size
 	cfg.Capture.Format = malgo.FormatS16
 	cfg.Capture.Channels = 1
 	cfg.Playback.Format = malgo.FormatS16
@@ -148,17 +151,18 @@ func (m *Malgo) Start(capture, playback func([]int16)) error {
 }
 
 // onData runs on miniaudio's thread with n frames of input and room for n
-// frames of output. The device is configured for n == FrameSamples but the
-// code copes with any n.
+// frames of output. The device is configured for n == one frame period but
+// the code copes with any n.
 func (m *Malgo) onData(out, in []byte, n uint32) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	frame := len(m.frame)
 	for i := 0; i < int(n) && 2*i+1 < len(in); i++ {
 		m.inAcc = append(m.inAcc, int16(binary.NativeEndian.Uint16(in[2*i:]))) //nolint:gosec // sample bits
 	}
-	for len(m.inAcc) >= FrameSamples {
-		m.capture(m.inAcc[:FrameSamples])
-		m.inAcc = append(m.inAcc[:0], m.inAcc[FrameSamples:]...)
+	for len(m.inAcc) >= frame {
+		m.capture(m.inAcc[:frame])
+		m.inAcc = append(m.inAcc[:0], m.inAcc[frame:]...)
 	}
 
 	for i := 0; i < int(n) && 2*i+1 < len(out); i++ {

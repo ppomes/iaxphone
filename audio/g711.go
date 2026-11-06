@@ -133,6 +133,9 @@ func (Ulaw) Decode(dst []int16, data []byte) []int16 {
 // Samples implements Codec: one byte per sample.
 func (Ulaw) Samples(data []byte) int { return len(data) }
 
+// Rate implements Codec: 8 kHz.
+func (Ulaw) Rate() int { return SampleRate }
+
 // Encode converts PCM to A-law, appending to dst.
 func (Alaw) Encode(dst []byte, pcm []int16) []byte {
 	for _, s := range pcm {
@@ -151,3 +154,6 @@ func (Alaw) Decode(dst []int16, data []byte) []int16 {
 
 // Samples implements Codec: one byte per sample.
 func (Alaw) Samples(data []byte) int { return len(data) }
+
+// Rate implements Codec: 8 kHz.
+func (Alaw) Rate() int { return SampleRate }

@@ -19,7 +19,7 @@ jobs:
       - name: Install the X11, Wayland and GL headers Fyne builds against
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y -q --no-install-recommends pkgconf libgl-dev libegl-dev \
+          sudo apt-get install -y -q --no-install-recommends pkgconf libopus-dev libgl-dev libegl-dev \
             libx11-dev libxcursor-dev libxi-dev libxinerama-dev libxrandr-dev \
             libxxf86vm-dev libwayland-dev libxkbcommon-dev wayland-protocols
       - run: go vet ./...
@@ -36,7 +36,7 @@ jobs:
       - name: Install the X11, Wayland and GL headers Fyne builds against
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y -q --no-install-recommends pkgconf libgl-dev libegl-dev \
+          sudo apt-get install -y -q --no-install-recommends pkgconf libopus-dev libgl-dev libegl-dev \
             libx11-dev libxcursor-dev libxi-dev libxinerama-dev libxrandr-dev \
             libxxf86vm-dev libwayland-dev libxkbcommon-dev wayland-protocols
       - uses: golangci/golangci-lint-action@v9

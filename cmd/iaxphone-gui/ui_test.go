@@ -38,6 +38,7 @@ import (
 
 	"github.com/ppomes/iaxphone/audio"
 	"github.com/ppomes/iaxphone/history"
+	"github.com/ppomes/iaxphone/iax2"
 	"github.com/ppomes/iaxphone/internal/fakeiax"
 	"github.com/ppomes/iaxphone/phone"
 )
@@ -70,7 +71,7 @@ func TestWindowDrivesCalls(t *testing.T) {
 	srv := fakeiax.New(t)
 	a := test.NewApp()
 	g := newGUI(a, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	g.settings = settings{Server: srv.Addr(), Username: "phone", Register: true, JitterMs: audio.DefaultJitterMs, Audio: "none"}
+	g.settings = settings{Server: srv.Addr(), Username: "phone", Register: true, JitterMs: audio.DefaultJitterMs, Codec: "ulaw", Audio: "none"}
 	var err error
 	if g.history, err = history.Open(filepath.Join(t.TempDir(), "history.jsonl")); err != nil {
 		t.Fatal(err)
@@ -249,12 +250,18 @@ func TestEndedAfterTransferRequest(t *testing.T) {
 func TestSettingsRoundTrip(t *testing.T) {
 	a := test.NewApp()
 	s := settings{Server: "pbx:4569", Username: "u", Secret: "s", CallerNumber: "12", CallerName: "n",
-		Register: false, JitterMs: 80, Audio: "none"}
+		Register: false, JitterMs: 80, Codec: "alaw", Audio: "none"}
 	s.save(a.Preferences())
 	if got := loadSettings(a.Preferences()); got != s {
 		t.Errorf("got %+v", got)
 	}
 	cfg := s.phoneConfig(slog.Default())
+	if len(cfg.Codecs) != len(phone.SupportedCodecs()) || cfg.Codecs[0] != iax2.FormatALAW {
+		t.Errorf("codecs %v for %q", cfg.Codecs, s.Codec)
+	}
+	if got := (settings{Codec: "nope"}).codecs(); !slices.Equal(got, phone.SupportedCodecs()) {
+		t.Errorf("codecs %v for an unknown name", got)
+	}
 	if cfg.Server != "pbx:4569" || cfg.Register || cfg.JitterMs != 80 {
 		t.Errorf("config %+v", cfg)
 	}
@@ -271,7 +278,7 @@ func TestSettingsPickDevice(t *testing.T) {
 	srv := fakeiax.New(t)
 	a := test.NewApp()
 	g := newGUI(a, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	g.settings = settings{Server: srv.Addr(), Username: "phone", JitterMs: audio.DefaultJitterMs, Audio: "none"}
+	g.settings = settings{Server: srv.Addr(), Username: "phone", JitterMs: audio.DefaultJitterMs, Codec: "ulaw", Audio: "none"}
 	g.devices = func() ([]audio.DeviceInfo, error) {
 		return []audio.DeviceInfo{
 			{Name: "Built-in Mic", Capture: true, Default: true},
