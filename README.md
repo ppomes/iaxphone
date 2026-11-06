@@ -99,7 +99,10 @@ The window is tested on Fyne's test driver against the fake server, see
 window, with a desktop entry) in `dist/deb/`, offline, from an orig
 tarball that vendors the Go modules (`debian/make-orig-tarball.sh`). It
 needs `debhelper`, Go 1.26 and the X11, Wayland and GL development
-packages listed in `debian/control`.
+packages listed in `debian/control`. `make deb SNAPSHOT=1` builds a
+snapshot of the current commit instead, versioned
+`<version>+YYYYMMDDHHMM` (UTC) so that it sorts after the release it is
+based on and before the next one.
 
 ## Testing against Asterisk
 

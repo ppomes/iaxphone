@@ -4,15 +4,16 @@
 # everything the build needs.
 #
 # Output: <outdir>/iaxphone_<version>.orig.tar.gz (outdir defaults to ..),
-# the version taken from debian/changelog. The tree comes from git HEAD
-# when there is a commit, from the working tree otherwise.
+# the version taken from debian/changelog unless $VERSION is set (snapshot
+# builds, see `make deb SNAPSHOT=1`). The tree comes from git HEAD when
+# there is a commit, from the working tree otherwise.
 #
-# Usage: debian/make-orig-tarball.sh [outdir]   (from the source root)
+# Usage: [VERSION=x.y.z] debian/make-orig-tarball.sh [outdir]   (from the source root)
 
 set -euo pipefail
 
 OUT=$(realpath -m "${1:-..}")
-VERSION=$(dpkg-parsechangelog -S Version | sed 's/-[^-]*$//')
+VERSION=${VERSION:-$(dpkg-parsechangelog -S Version | sed 's/-[^-]*$//')}
 DIST="iaxphone-${VERSION}"
 TARBALL="$OUT/iaxphone_${VERSION}.orig.tar.gz"
 WORK=$(mktemp -d)
