@@ -548,11 +548,13 @@ func TestHoldAndTransfer(t *testing.T) {
 	if !srv.Held() {
 		t.Error("server not held")
 	}
+	// The device goes on capturing, nothing goes out and nothing fails.
 	time.Sleep(50 * time.Millisecond)
-	sent := p.Stats().Sent
+	before := p.Stats()
+	sent := before.Sent
 	time.Sleep(100 * time.Millisecond)
-	if got := p.Stats().Sent; got != sent {
-		t.Errorf("sent %d frames while on hold", got-sent)
+	if after := p.Stats(); after.Sent != sent || after.Captured <= before.Captured || after.SendErrors != before.SendErrors {
+		t.Errorf("on hold: stats went from %+v to %+v", before, after)
 	}
 	if ci, _ := p.Call(); !ci.OnHold {
 		t.Errorf("Call() %+v", ci)
