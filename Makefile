@@ -2,7 +2,7 @@ GO      ?= go
 BIN     := bin/iaxphone
 GUI     := bin/iaxphone-gui
 
-.PHONY: all build gui test vet lint fmt clean deb asterisk-up asterisk-down asterisk-logs
+.PHONY: all build gui test vet lint fmt clean deb-src deb asterisk-up asterisk-down asterisk-logs
 
 all: build
 
@@ -27,12 +27,17 @@ fmt:
 clean:
 	rm -rf bin dist
 
-# Debian packages, built offline in dist/deb from an orig tarball that
-# vendors the Go modules: iaxphone (CLI) and iaxphone-gui (window).
-# `make deb SNAPSHOT=1` builds a snapshot instead, versioned
+# Debian packages: iaxphone (CLI) and iaxphone-gui (window), from an orig
+# tarball that vendors the Go modules so that the build needs no network.
+# `make deb-src` prepares the source package (orig tarball, .dsc) in
+# dist/deb; `make deb` then builds the binaries in an ubuntu:22.04
+# container (debian/build-in-docker.sh, needs Docker). Built against
+# jammy's libraries, the same .deb installs on Ubuntu 22.04 and on every
+# later release.
+# Add SNAPSHOT=1 for a snapshot of the current commit, versioned
 # <changelog version>+YYYYMMDDHHMM (UTC) with a changelog entry added in
 # the build copy only; debian/changelog in the tree is left alone.
-deb:
+deb-src:
 	rm -rf dist/deb && mkdir -p dist/deb
 	set -e; v=$$(dpkg-parsechangelog -S Version | sed 's/-[^-]*$$//'); \
 	if [ -n "$(SNAPSHOT)" ]; then v=$$v+$$(date -u +%Y%m%d%H%M); fi; \
@@ -42,8 +47,11 @@ deb:
 		DEBFULLNAME="Pierre POMES" DEBEMAIL=pierre.pomes@gmail.com \
 		dch -c iaxphone-*/debian/changelog -v "$$v-1" -D unstable \
 			"Snapshot of git $$(git -C ../.. rev-parse --short HEAD)."; \
-	fi
-	cd dist/deb/iaxphone-*/ && dpkg-buildpackage -us -uc
+	fi; \
+	cd iaxphone-*/ && dpkg-buildpackage -S -us -uc -d
+
+deb: deb-src
+	debian/build-in-docker.sh ubuntu:22.04 dist/deb ppa:longsleep/golang-backports
 	lintian dist/deb/*.changes || true
 
 # Test Asterisk (chan_iax2) on udp/4569, see docker/asterisk/.

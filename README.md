@@ -96,13 +96,13 @@ The window is tested on Fyne's test driver against the fake server, see
 ## Debian packages
 
 `make deb` builds `iaxphone` (the command line) and `iaxphone-gui` (the
-window, with a desktop entry) in `dist/deb/`, offline, from an orig
-tarball that vendors the Go modules (`debian/make-orig-tarball.sh`). It
-needs `debhelper`, Go 1.26 and the X11, Wayland and GL development
-packages listed in `debian/control`. `make deb SNAPSHOT=1` builds a
-snapshot of the current commit instead, versioned
-`<version>+YYYYMMDDHHMM` (UTC) so that it sorts after the release it is
-based on and before the next one.
+window, with a desktop entry) in `dist/deb/`, from an orig tarball that
+vendors the Go modules (`debian/make-orig-tarball.sh`). The binaries are
+built in an `ubuntu:22.04` container (`debian/build-in-docker.sh`, needs
+Docker and `debhelper` on the host) so that the same packages install on
+Ubuntu 22.04 and on every later release. Add `SNAPSHOT=1` for a snapshot
+of the current commit, versioned `<version>+YYYYMMDDHHMM` (UTC) so that
+it sorts after the release it is based on and before the next one.
 
 ## Testing against Asterisk
 
