@@ -53,7 +53,6 @@ type Server struct {
 	regs    int // REGREQ seen
 	hangups []string
 	digits  string   // DTMF_END digits received
-	held    bool     // between QUELCH and UNQUELCH
 	xfers   []string // CALLED_NUMBER of every TRANSFER received
 	client  *net.UDPAddr
 	callNo  uint16               // last call number handed out
@@ -74,6 +73,7 @@ type fakeCall struct {
 	peer uint16 // the client's
 	oseq uint8  // our next outbound sequence number
 	iseq uint8  // the client's next sequence number
+	held bool   // between the client's QUELCH and UNQUELCH
 }
 
 // New starts a server; it is closed when the test ends.
@@ -230,7 +230,7 @@ func (s *Server) loop() {
 			ack()
 		case iax2.IAXQuelch, iax2.IAXUnquelch:
 			s.mu.Lock()
-			s.held = iax2.IAXSubclass(full.Subclass) == iax2.IAXQuelch
+			fc.held = iax2.IAXSubclass(full.Subclass) == iax2.IAXQuelch
 			s.mu.Unlock()
 			ack()
 		case iax2.IAXTransfer:
@@ -391,11 +391,11 @@ func (s *Server) Registrations() int {
 	return s.regs
 }
 
-// Held reports whether the client put the server on hold.
+// Held reports whether the client put the current call on hold.
 func (s *Server) Held() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.held
+	return s.cur != nil && s.cur.held
 }
 
 // Transfers returns the number of every TRANSFER received.

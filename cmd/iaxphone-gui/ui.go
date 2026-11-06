@@ -27,6 +27,8 @@ import (
 	"math"
 	"slices"
 	"strconv"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -75,6 +77,8 @@ type gui struct {
 	transfer   *widget.Button
 	mute       *widget.Check
 	hold       *widget.Check
+	holdMu     sync.Mutex   // one hold change at a time
+	holdSeq    atomic.Int64 // the latest hold change asked; earlier ones still waiting are dropped
 	micMeter   *widget.ProgressBar
 	spkMeter   *widget.ProgressBar
 	keys       *widget.Label
@@ -223,12 +227,16 @@ func (g *gui) handle(ev phone.Event) {
 		g.showKeys()
 	case phone.EventHold, phone.EventUnhold:
 		g.call = ev.Call
+		g.hold.SetChecked(ev.Call.OnHold) // a change of ours, or none: no new request
 		g.refresh()
 	case phone.EventTransfer:
-		// The server wants us to call this number instead; it ends the
-		// call next, so leave the number in the entry.
-		g.number.SetText(ev.Number)
-		g.number.CursorColumn = len(g.number.Text)
+		// The server wants us to call this number instead and ends the
+		// call next: offer the number in the entry unless one is being
+		// typed there.
+		if g.number.Text == "" {
+			g.number.SetText(ev.Number)
+			g.number.CursorColumn = len(g.number.Text)
+		}
 		g.callStatus.SetText("Asked to call " + ev.Number + " instead")
 	case phone.EventEnded:
 		g.lastCall = endedText(ev.Call)
@@ -310,7 +318,7 @@ func endedText(c phone.CallInfo) string {
 		by = "us"
 	}
 	how := fmt.Sprintf("ended by %s (%s)", by, c.Cause)
-	if c.TransferredTo != "" {
+	if c.TransferredTo != "" && !c.HungUpByUs {
 		how = "transferred to " + c.TransferredTo
 	}
 	st := c.Stats
@@ -388,20 +396,29 @@ func (g *gui) hangup() {
 }
 
 // setHold puts the call on hold or takes it back, off the UI goroutine:
-// the controller waits for the server's acknowledgement.
+// the controller waits for the server's acknowledgement. Changes are
+// applied one at a time and only the latest one asked counts, so that a
+// box clicked twice while the first change is on its way ends up where
+// the user left it.
 func (g *gui) setHold(on bool) {
-	if g.phone == nil || !g.inCall || g.call.State != phone.CallActive {
+	if g.phone == nil || !g.inCall || g.call.State != phone.CallActive || on == g.call.OnHold {
 		return
 	}
 	p := g.phone
+	seq := g.holdSeq.Add(1)
 	go func() {
+		g.holdMu.Lock()
+		defer g.holdMu.Unlock()
+		if g.holdSeq.Load() != seq {
+			return // superseded by a later click
+		}
 		var err error
 		if on {
 			err = p.Hold()
 		} else {
 			err = p.Unhold()
 		}
-		if err != nil {
+		if err != nil && !errors.Is(err, phone.ErrNoCall) { // the call ended meanwhile: EventEnded says so
 			fyne.Do(func() { g.showError(err) })
 		}
 	}()

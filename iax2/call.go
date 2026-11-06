@@ -133,8 +133,9 @@ type Call struct {
 	dtmfBegun byte // digit of the DTMF_BEGIN received and not yet ended (run only)
 	dtmfMu    sync.Mutex
 
-	onHold   bool // we put the peer on hold (QUELCH sent): no voice is sent
-	quelched bool // the peer put us on hold (QUELCH received): no voice is sent
+	onHold   bool       // we put the peer on hold (QUELCH sent): no voice is sent
+	quelched bool       // the peer put us on hold (QUELCH or HOLD received): no voice is sent
+	holdMu   sync.Mutex // Hold and Unhold, one at a time
 
 	// pending holds the sequenced full frames sent and not yet acknowledged
 	// by the peer, keyed by OSeqno, each with its retransmission timer.
@@ -637,9 +638,14 @@ func (c *Call) handleFull(f *FullFrame) {
 			return
 		case IAXQuelch, IAXUnquelch:
 			// Stop (or resume) our media here, before run gets to it.
-			c.mu.Lock()
-			c.quelched = IAXSubclass(f.Subclass) == IAXQuelch
-			c.mu.Unlock()
+			c.setQuelched(IAXSubclass(f.Subclass) == IAXQuelch)
+		}
+	case FrameControl:
+		// A peer that put us on hold (HOLD passed through by Asterisk)
+		// has no use for our audio either: one hold state for both forms.
+		switch ControlSubclass(f.Subclass) {
+		case ControlHold, ControlUnhold:
+			c.setQuelched(ControlSubclass(f.Subclass) == ControlHold)
 		}
 	case FrameVoice:
 		// The peer's full voice frame is authoritative for the codec.
@@ -657,6 +663,12 @@ func (c *Call) handleFull(f *FullFrame) {
 	if f.Type != FrameVoice {
 		c.queue(f)
 	}
+}
+
+func (c *Call) setQuelched(on bool) {
+	c.mu.Lock()
+	c.quelched = on
+	c.mu.Unlock()
 }
 
 func (c *Call) queue(f *FullFrame) {

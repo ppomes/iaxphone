@@ -154,13 +154,15 @@ type CallInfo struct {
 	Answered time.Time // zero until answered
 	OnHold   bool      // we put the peer on hold (Hold)
 	Held     bool      // the peer put us on hold
+	// TransferredTo is the number we asked the server to transfer the call
+	// to (Transfer); the server hangs up on us once it has done so.
+	TransferredTo string
 
 	// Set in EventEnded.
-	HungUpByUs    bool
-	TransferredTo string // the number we transferred the call to (Transfer); the peer then hung up
-	Cause         string // the peer's hangup cause, or why the call failed
-	Err           error  // non-nil when the call failed (rejected, timeout...)
-	Stats         audio.Stats
+	HungUpByUs bool
+	Cause      string // the peer's hangup cause, or why the call failed
+	Err        error  // non-nil when the call failed (rejected, timeout...)
+	Stats      audio.Stats
 }
 
 // TalkTime is how long the call has been (or was) answered.
@@ -209,6 +211,7 @@ type Phone struct {
 	cur    *activeCall
 	muted  bool
 	closed bool
+	holdMu sync.Mutex // Hold and Unhold, one at a time, state and event included
 
 	key         *pressedKey       // the key held down, if any
 	player      *audio.Player     // keypad tones outside a call
@@ -490,52 +493,73 @@ func (p *Phone) active() (*activeCall, error) {
 
 // Hold puts the active call on hold: the peer stops sending its audio and
 // may play music to whoever is at the other end, and we send nothing. It
-// returns once the peer has acknowledged, with EventHold on the way.
-func (p *Phone) Hold() error {
-	ac, err := p.active()
-	if err != nil {
-		return err
-	}
-	if err := ac.call.Hold(); err != nil {
-		return err
-	}
-	p.mu.Lock()
-	ac.info.OnHold = true
-	p.mu.Unlock()
-	p.emit(Event{Kind: EventHold, Call: p.snapshot(ac)})
-	return nil
-}
+// returns once the peer has acknowledged, with EventHold on the way, and
+// does nothing on a call already on hold.
+func (p *Phone) Hold() error { return p.setHold(true) }
 
 // Unhold takes the active call back off hold; EventUnhold follows.
-func (p *Phone) Unhold() error {
+func (p *Phone) Unhold() error { return p.setHold(false) }
+
+// setHold changes the hold state of the active call, one change at a time
+// so that they take effect in the order asked. A call that ended while
+// the peer was acknowledging gets no event: its EventEnded is the last.
+func (p *Phone) setHold(on bool) error {
+	p.holdMu.Lock()
+	defer p.holdMu.Unlock()
 	ac, err := p.active()
 	if err != nil {
 		return err
 	}
-	if err := ac.call.Unhold(); err != nil {
+	p.mu.Lock()
+	same := ac.info.OnHold == on
+	p.mu.Unlock()
+	if same {
+		return nil
+	}
+	if on {
+		err = ac.call.Hold()
+	} else {
+		err = ac.call.Unhold()
+	}
+	if err != nil {
 		return err
 	}
 	p.mu.Lock()
-	ac.info.OnHold = false
+	if p.cur != ac || ac.info.State != CallActive {
+		p.mu.Unlock()
+		return ErrNoCall
+	}
+	ac.info.OnHold = on
+	info := ac.info
 	p.mu.Unlock()
-	p.emit(Event{Kind: EventUnhold, Call: p.snapshot(ac)})
+	kind := EventUnhold
+	if on {
+		kind = EventHold
+	}
+	p.emit(Event{Kind: kind, Call: info})
 	return nil
 }
 
-// Transfer sends whoever is at the other end of the active call to number
-// (a blind transfer) and returns once the server has acknowledged. The
-// server then ends our call: EventEnded follows, with TransferredTo set.
+// Transfer asks the server to send whoever is at the other end of the
+// active call to number (a blind transfer) and returns once the server has
+// acknowledged. The server then ends our call: EventEnded follows, with
+// TransferredTo set. The acknowledgement says the server took the request,
+// not that it could carry it out: a call that is not bridged goes on.
 func (p *Phone) Transfer(number string) error {
 	ac, err := p.active()
 	if err != nil {
 		return err
 	}
-	if err := ac.call.Transfer(number); err != nil {
-		return err
-	}
+	// Recorded before sending: the server may hang up right behind its ACK.
 	p.mu.Lock()
 	ac.info.TransferredTo = number
 	p.mu.Unlock()
+	if err := ac.call.Transfer(number); err != nil {
+		p.mu.Lock()
+		ac.info.TransferredTo = ""
+		p.mu.Unlock()
+		return err
+	}
 	return nil
 }
 

@@ -196,6 +196,8 @@ func (c *console) script(ctx context.Context) {
 	}
 }
 
+// pressKeys presses the -dtmf keys one after the other, each held for
+// -hold.
 func (c *console) pressKeys(ctx context.Context) {
 	for i := 0; i < len(c.dtmf); i++ {
 		if err := c.p.PressKey(c.dtmf[i]); err != nil {
@@ -340,9 +342,12 @@ func printEnded(ci phone.CallInfo) {
 		return
 	}
 	st := ci.Stats
-	if ci.TransferredTo != "" {
+	switch {
+	case ci.TransferredTo != "" && !ci.HungUpByUs:
 		fmt.Printf("%s %s: %s, transferred to %s (%s)\n", direction, ci.Number, ci.Format, ci.TransferredTo, ci.Cause)
-	} else {
+	case ci.TransferredTo != "":
+		fmt.Printf("%s %s: %s, hung up by us (%s) after asking for a transfer to %s\n", direction, ci.Number, ci.Format, ci.Cause, ci.TransferredTo)
+	default:
 		fmt.Printf("%s %s: %s, hung up by %s (%s)\n", direction, ci.Number, ci.Format, by, ci.Cause)
 	}
 	fmt.Printf("  talk time %s, voice frames sent %d, played %d, silent %d, tone %d; jitter: received %d, lost %d, late %d, dropped %d, underruns %d\n",

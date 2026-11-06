@@ -49,41 +49,50 @@ func (c *Call) Held() bool {
 // by the peer, which then stops sending its audio and may play music to
 // whoever it bridged us with (chan_iax2 does, with the mohsuggest class).
 // Our voice frames are dropped until Unhold. It does nothing on a call
-// already on hold and returns ErrCallDown on a call that is not up.
+// already on hold and returns ErrCallDown on a call that is not up. Hold
+// and Unhold are serialised: each takes effect in the order it was called.
 func (c *Call) Hold() error {
-	c.mu.Lock()
-	if c.state != StateUp {
-		c.mu.Unlock()
-		return ErrCallDown
-	}
-	if c.onHold {
-		c.mu.Unlock()
-		return nil
-	}
-	c.onHold = true
-	c.mu.Unlock()
 	data, err := (IEs{StringIE(IEMusicOnHold, "")}).Encode()
 	if err != nil {
 		return err
 	}
-	return c.command(IAXQuelch, data)
+	return c.setHold(true, IAXQuelch, data)
 }
 
 // Unhold takes the peer back off hold: UNQUELCH, acknowledged by the peer,
 // which resumes its audio; so do we.
 func (c *Call) Unhold() error {
+	return c.setHold(false, IAXUnquelch, nil)
+}
+
+// setHold records the hold state and sends the command that goes with it,
+// one change at a time. The state is reverted when the command cannot be
+// sent: what the peer knows and what we do stay the same.
+func (c *Call) setHold(on bool, sub IAXSubclass, data []byte) error {
+	c.holdMu.Lock()
+	defer c.holdMu.Unlock()
 	c.mu.Lock()
 	if c.state != StateUp {
 		c.mu.Unlock()
 		return ErrCallDown
 	}
-	if !c.onHold {
+	if c.onHold == on {
 		c.mu.Unlock()
 		return nil
 	}
-	c.onHold = false
+	c.onHold = on
 	c.mu.Unlock()
-	return c.command(IAXUnquelch, nil)
+	f, err := c.sendFull(FrameIAX, uint64(sub), data)
+	if err != nil {
+		c.mu.Lock()
+		c.onHold = !on
+		c.mu.Unlock()
+		return err
+	}
+	if err := c.waitAck(f, 0); err != nil {
+		return fmt.Errorf("iax2: %s not acknowledged by %s: %w", sub, c.client.server, err)
+	}
+	return nil
 }
 
 // Transfer asks the peer to connect whoever it bridged us with to number

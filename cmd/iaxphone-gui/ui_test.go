@@ -175,9 +175,16 @@ func TestWindowDrivesCalls(t *testing.T) {
 	if g.mute.Checked {
 		t.Error("mute not reset for the new call")
 	}
-	// The server asks us to call 777 instead: the number waits in the entry.
+	// The server asks us to call 777 instead: shown, and put in the entry
+	// only when nothing is being typed there.
 	srv.Transfer("777")
-	pump(t, g, p, "transfer request", func() bool { return g.number.Text == "777" })
+	pump(t, g, p, "transfer request", hasText(g.callStatus, "Asked to call 777 instead"))
+	if g.number.Text != "601" {
+		t.Errorf("number being typed replaced by %q", g.number.Text)
+	}
+	g.number.SetText("")
+	srv.Transfer("778")
+	pump(t, g, p, "second transfer request", func() bool { return g.number.Text == "778" })
 	srv.Hangup()
 	pump(t, g, p, "peer hangup", hasText(g.details, "Call from Asterisk <1001> ended by the peer (Normal Clearing (16))"))
 

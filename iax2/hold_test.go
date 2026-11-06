@@ -50,9 +50,6 @@ func TestHoldAndTransfer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := call.Hold(); !errors.Is(err, ErrCallDown) && call.State() != StateUp {
-		t.Errorf("Hold before answer: %v", err)
-	}
 	if ev := nextEvent(t, call); ev.Kind != EventAnswered {
 		t.Fatalf("event %v", ev)
 	}
@@ -143,10 +140,15 @@ func TestHoldAndTransfer(t *testing.T) {
 	if ev := nextEvent(t, call); ev.Kind != EventHold {
 		t.Errorf("after CONTROL/HOLD: %+v", ev)
 	}
+	eventually(t, "held by CONTROL/HOLD", call.Held)
+	if err := call.SendVoice([]byte{0xFF}); !errors.Is(err, ErrOnHold) {
+		t.Errorf("SendVoice after CONTROL/HOLD: %v", err)
+	}
 	peer(FrameControl, uint64(ControlUnhold), 8, 600, nil)
 	if ev := nextEvent(t, call); ev.Kind != EventUnhold {
 		t.Errorf("after CONTROL/UNHOLD: %+v", ev)
 	}
+	eventually(t, "unheld by CONTROL/UNHOLD", func() bool { return !call.Held() })
 	peer(FrameIAX, uint64(IAXTransfer), 9, 700, IEs{StringIE(IECalledNumber, "777")})
 	if ev := nextEvent(t, call); ev.Kind != EventTransfer || ev.Number != "777" {
 		t.Errorf("after TRANSFER: %+v", ev)
