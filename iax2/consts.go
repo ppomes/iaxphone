@@ -255,6 +255,7 @@ const (
 	CauseUserBusy         uint8 = 17
 	CauseNoAnswer         uint8 = 19
 	CauseCallRejected     uint8 = 21
+	CauseOutOfOrder       uint8 = 27
 	CauseCongestion       uint8 = 34
 	CauseBearerCapability uint8 = 58
 
@@ -265,6 +266,7 @@ const (
 var causeNames = map[uint8]string{
 	CauseUnallocated: "Unallocated (unassigned) number", CauseNormalClearing: "Normal Clearing",
 	CauseUserBusy: "User busy", CauseNoAnswer: "No answer", CauseCallRejected: "Call Rejected",
+	CauseOutOfOrder: "Destination out of order",
 	CauseCongestion: "Circuit/channel congestion", CauseBearerCapability: "Bearer capability not available",
 }
 

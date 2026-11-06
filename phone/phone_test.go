@@ -24,6 +24,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -391,7 +392,7 @@ func TestDTMF(t *testing.T) {
 	if got := srv.Digits(); got != "12#" {
 		t.Errorf("server received %q", got)
 	}
-	srv.PressKey('5', 3)
+	srv.PressKey('5')
 	ev := next(t, p, EventDTMF)
 	if ev.Digit != '5' || ev.Call.State != CallActive {
 		t.Errorf("dtmf event %+v", ev)
@@ -435,4 +436,86 @@ func TestPeerFrameSizes(t *testing.T) {
 		t.Fatal(err)
 	}
 	next(t, p, EventEnded)
+}
+
+// A link that loses the first copy of every frame: the call, the digits
+// and the hangup all get through on their retransmissions, which the
+// server sees with the retransmission bit set.
+func TestLossyLink(t *testing.T) {
+	srv := fakeiax.New(t)
+	srv.Lossy(true)
+	p := startPhone(t, srv, false)
+	start := time.Now()
+	if err := p.Dial("600"); err != nil {
+		t.Fatal(err)
+	}
+	next(t, p, EventAnswered)
+	if took := time.Since(start); took < 500*time.Millisecond {
+		t.Errorf("answered after %s: the NEW got through first time", took)
+	}
+	if err := p.SendDTMF('1'); err != nil {
+		t.Fatal(err)
+	}
+	if got := srv.Digits(); got != "1" {
+		t.Errorf("server received %q", got)
+	}
+	if err := p.Hangup(); err != nil {
+		t.Fatal(err)
+	}
+	ev := next(t, p, EventEnded)
+	if !ev.Call.HungUpByUs || ev.Call.Err != nil || ev.Call.Cause != "hung up" {
+		t.Errorf("ended %+v", ev.Call)
+	}
+	if causes := srv.HangupCauses(); len(causes) != 1 || causes[0] != "Normal Clearing" {
+		t.Errorf("server saw hangups %q", causes)
+	}
+	// NEW, DTMF_BEGIN, DTMF_END, HANGUP: each got there on its second copy.
+	if n := srv.Retransmitted(); n < 4 {
+		t.Errorf("server saw %d retransmitted frames", n)
+	}
+}
+
+// A server that stops answering mid-call: the digit comes back with an
+// error and the call ends on its own with the cause "no reply".
+func TestServerGoesDeaf(t *testing.T) {
+	srv := fakeiax.New(t)
+	p := startPhone(t, srv, false)
+	if err := p.Dial("600"); err != nil {
+		t.Fatal(err)
+	}
+	next(t, p, EventAnswered)
+	srv.Deaf(true)
+	start := time.Now()
+	if err := p.SendDTMF('1'); err == nil || !strings.Contains(err.Error(), "no reply to DTMF_BEGIN") {
+		t.Errorf("SendDTMF: %v", err)
+	}
+	deadline := time.Now().Add(6 * time.Second)
+	var ev Event
+	for {
+		select {
+		case e := <-p.Events():
+			if e.Kind == EventEnded {
+				ev = e
+			}
+		case <-time.After(time.Until(deadline)):
+			t.Fatal("timeout waiting for ended")
+		}
+		if ev.Kind == EventEnded {
+			break
+		}
+	}
+	if took := time.Since(start); took < 3*time.Second || took > 6*time.Second {
+		t.Errorf("call ended after %s", took)
+	}
+	if ev.Call.HungUpByUs || ev.Call.Cause != "no reply" || ev.Call.Err != nil || ev.Call.State != CallEnded {
+		t.Errorf("ended %+v", ev.Call)
+	}
+	if _, ok := p.Call(); ok {
+		t.Error("call still current")
+	}
+	srv.Deaf(false)
+	if err := p.Dial("600"); err != nil {
+		t.Fatalf("Dial after the failure: %v", err)
+	}
+	next(t, p, EventAnswered)
 }

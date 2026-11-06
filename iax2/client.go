@@ -134,12 +134,21 @@ func Dial(ctx context.Context, cfg Config) (*Client, error) {
 // LocalAddr returns the bound UDP address.
 func (c *Client) LocalAddr() net.Addr { return c.conn.LocalAddr() }
 
-// Close hangs up every call, releases the registration and closes the socket.
+// Close ends every call and closes the socket. Calls in progress are not
+// hung up on the wire: the caller is expected to have done that.
 func (c *Client) Close() error {
-	// TODO: REGREL, hang up calls
 	err := net.ErrClosed
 	c.closeOnce.Do(func() {
 		close(c.done)
+		c.mu.Lock()
+		calls := make([]*Call, 0, len(c.calls))
+		for _, call := range c.calls {
+			calls = append(calls, call)
+		}
+		c.mu.Unlock()
+		for _, call := range calls {
+			call.stopRetransmits()
+		}
 		err = c.conn.Close()
 		c.wg.Wait()
 	})
@@ -248,17 +257,15 @@ func (c *Client) Call(ctx context.Context, number string, media chan<- MediaFram
 }
 
 // abort tears down a call that failed during setup. When hangup is set a
-// HANGUP is sent so the server does not keep the call around.
+// HANGUP is sent, and retransmitted until acknowledged, so the server does
+// not keep the call around.
 func (c *Client) abort(call *Call, hangup bool) {
 	if hangup && call.RemoteNumber() != 0 {
 		ies := IEs{StringIE(IECause, CauseText(CauseCallRejected)), Uint8IE(IECauseCode, CauseCallRejected)}
 		data, _ := ies.Encode()
 		_, _ = call.sendFull(FrameIAX, uint64(IAXHangup), data)
 	}
-	call.setState(StateDown)
-	c.release(call)
-	close(call.Events)
-	close(call.done)
+	call.end()
 }
 
 // Ping sends an IAX POKE on a fresh call number and waits for the PONG,
@@ -302,11 +309,12 @@ func (c *Client) newCall() *Call {
 	}
 }
 
-// release frees a call number.
-//
-// TODO: keep the number reserved for a grace period so late retransmissions
-// from the peer are not mistaken for a new call.
+// release frees a call number and stops the call's retransmissions. Call
+// numbers are handed out round-robin over the whole 15-bit space, so a late
+// frame from the peer for a released call finds no call and is answered
+// with INVAL rather than mistaken for a new one.
 func (c *Client) release(call *Call) {
+	call.stopRetransmits()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.calls, call.localNo)
@@ -385,8 +393,21 @@ func (c *Client) dispatch(f Frame) {
 			call.handleFull(f)
 			return
 		}
-		// TODO: reply INVAL for unknown destination call numbers.
-		c.log.Warn("frame for unknown call", "frame", f)
+		// A call we no longer have: tell the peer so it stops
+		// retransmitting (RFC 5456 §6.9.3). Replies that expect nothing
+		// back are just dropped, as chan_iax2 does.
+		if f.Type == FrameIAX {
+			switch IAXSubclass(f.Subclass) {
+			case IAXAck, IAXInval, IAXVnak, IAXTxCnt, IAXTxAcc, IAXTxRel:
+				c.log.Debug("frame for unknown call", "frame", f)
+				return
+			}
+		}
+		c.log.Info("frame for unknown call, INVAL", "frame", f)
+		inval := &FullFrame{SrcCall: f.DstCall, DstCall: f.SrcCall, Type: FrameIAX, Subclass: uint64(IAXInval)}
+		if err := c.send(inval); err != nil {
+			c.log.Warn("inval", "err", err)
+		}
 	case *MiniFrame:
 		// Mini frames carry the peer's call number only.
 		c.mu.Lock()

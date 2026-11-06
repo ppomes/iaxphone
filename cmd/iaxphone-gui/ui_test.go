@@ -129,7 +129,7 @@ func TestWindowDrivesCalls(t *testing.T) {
 	if g.keys.Text != "Keys sent: 5" {
 		t.Errorf("keys %q", g.keys.Text)
 	}
-	srv.PressKey('7', 3)
+	srv.PressKey('7')
 	pump(t, g, p, "received key", hasText(g.keys, "Keys received: 7"))
 	if !strings.HasPrefix(g.keys.Text, "Keys sent: 5\n") {
 		t.Errorf("keys %q", g.keys.Text)

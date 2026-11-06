@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sort"
 	"sync"
 	"time"
 )
@@ -96,9 +97,10 @@ type MediaFrame struct {
 }
 
 // Call is one IAX2 call leg. Protocol housekeeping (sequence numbers, ACKs,
-// PING/LAGRQ replies, media) happens in handleFull/handleMini on the
-// client's read goroutine; signalling is consumed by the transaction in
-// progress (await) and then by run.
+// retransmissions, PING/LAGRQ replies, media) happens in handleFull/handleMini
+// on the client's read goroutine and on the retransmission timers;
+// signalling is consumed by the transaction in progress (await) and then by
+// run.
 type Call struct {
 	mu sync.Mutex
 
@@ -127,14 +129,27 @@ type Call struct {
 	dtmfBegun byte // digit of the DTMF_BEGIN received and not yet ended (run only)
 	dtmfMu    sync.Mutex
 
-	// pending holds full frames awaiting an ACK, keyed by OSeqno.
-	// TODO: retransmission timer for every full frame, VNAK handling.
-	pending map[uint8]*FullFrame
+	// pending holds the sequenced full frames sent and not yet acknowledged
+	// by the peer, keyed by OSeqno, each with its retransmission timer.
+	pending map[uint8]*pendingFrame
+	// closed is set once nothing is to be retransmitted any more: the call
+	// has been released or has failed.
+	closed bool
+	// linger is set when the call is over for its user (run returned) but a
+	// final frame (HANGUP, REJECT) still awaits its ACK: the call number is
+	// released when the ACK arrives or retransmission gives up.
+	linger bool
+	// err is why the call failed on our side (the peer stopped
+	// acknowledging); failed is closed when it is set.
+	err    error
+	failed chan struct{}
+	// vnak is the ISeqno of the last VNAK sent, valid when vnakSent, so
+	// that one gap asks for its frames once.
+	vnak     uint8
+	vnakSent bool
 
 	// inbox receives the signalling full frames addressed to this call.
 	inbox chan *FullFrame
-	// acks receives the ISeqno of each ACK, for waitAck.
-	acks chan uint8
 	// stop is closed by Hangup to end run.
 	stop     chan struct{}
 	stopOnce sync.Once
@@ -150,9 +165,9 @@ func newCallState(c *Client, no uint16) *Call {
 		client:  c,
 		localNo: no,
 		start:   time.Now(),
-		pending: make(map[uint8]*FullFrame),
+		pending: make(map[uint8]*pendingFrame),
+		failed:  make(chan struct{}),
 		inbox:   make(chan *FullFrame, 32),
-		acks:    make(chan uint8, 8),
 		stop:    make(chan struct{}),
 		done:    make(chan struct{}),
 		Events:  make(chan Event, 16),
@@ -199,6 +214,15 @@ func (c *Call) Format() Format {
 // Done is closed when the call is over, whichever side ended it.
 func (c *Call) Done() <-chan struct{} { return c.done }
 
+// Err returns why the call failed on our side: the peer stopped
+// acknowledging our frames. It is nil for a call that ended normally,
+// whichever side hung up.
+func (c *Call) Err() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.err
+}
+
 // MediaDropped counts voice frames dropped because Media was full.
 func (c *Call) MediaDropped() int {
 	c.mu.Lock()
@@ -239,6 +263,7 @@ func (c *Call) sendFullTS(typ FrameType, subclass uint64, ts uint32, data []byte
 	}
 	if sequenced(f) {
 		c.oseqno++
+		c.trackLocked(f)
 	}
 	c.mu.Unlock()
 	return f, c.client.send(f)
@@ -275,15 +300,161 @@ func sequenced(f *FullFrame) bool {
 	return true
 }
 
-// Retransmission of a full frame awaiting its reply.
-const (
+// Retransmission of full frames (RFC 5456 §7.1). A sequenced full frame is
+// sent again every retransmitInterval until the peer acknowledges it, with
+// the R bit set and the current inbound sequence number; after
+// retransmitAttempts transmissions without a reply the call is over ("no
+// reply"). Variables rather than constants so that tests can hurry them.
+var (
 	retransmitInterval = time.Second
 	retransmitAttempts = 4
 )
 
-// await waits for an IAX frame whose subclass is one of want, retransmitting
-// sent until it arrives. INVAL, REJECT, REGREJ and HANGUP end the wait with
-// an error.
+// pendingFrame is a sequenced full frame sent and not yet acknowledged.
+type pendingFrame struct {
+	frame    *FullFrame
+	attempts int           // times sent so far
+	timer    *time.Timer   // next retransmission
+	acked    chan struct{} // closed when the peer acknowledged the frame
+}
+
+// trackLocked queues f for retransmission until the peer acknowledges it.
+// Must be called with c.mu held.
+func (c *Call) trackLocked(f *FullFrame) {
+	if c.closed {
+		return
+	}
+	seq := f.OSeqno
+	p := &pendingFrame{frame: f, attempts: 1, acked: make(chan struct{})}
+	p.timer = time.AfterFunc(retransmitInterval, func() { c.retransmit(seq) })
+	c.pending[seq] = p
+}
+
+// retransmit is the timer of the pending frame seq: it sends the frame
+// again, or gives up on the call after retransmitAttempts.
+func (c *Call) retransmit(seq uint8) {
+	c.mu.Lock()
+	p := c.pending[seq]
+	if p == nil || c.closed {
+		c.mu.Unlock()
+		return
+	}
+	if p.attempts >= retransmitAttempts {
+		c.mu.Unlock()
+		c.fail(fmt.Errorf("iax2: no reply to %s from %s after %d attempts",
+			frameName(p.frame), c.client.server, p.attempts))
+		return
+	}
+	p.attempts++
+	p.timer.Reset(retransmitInterval)
+	c.mu.Unlock()
+	if err := c.resend(p.frame); err != nil {
+		c.client.log.Warn("retransmit", "call", c.localNo, "frame", p.frame, "err", err)
+	}
+}
+
+// acknowledgedLocked drops the pending frames the peer has acknowledged:
+// every full frame it sends carries in ISeqno the sequence number it
+// expects next, so everything before it has arrived. It reports whether a
+// lingering call can now be released. Must be called with c.mu held.
+func (c *Call) acknowledgedLocked(iseq uint8) (release bool) {
+	for seq, p := range c.pending {
+		if d := iseq - seq; d > 0 && d < 128 { // seq before iseq, modulo 256
+			p.timer.Stop()
+			close(p.acked)
+			delete(c.pending, seq)
+		}
+	}
+	return c.linger && len(c.pending) == 0
+}
+
+// resendFrom retransmits, in order, the pending frames from seq on: the
+// peer sent a VNAK saying it has not received them.
+func (c *Call) resendFrom(seq uint8) {
+	c.mu.Lock()
+	var frames []*FullFrame
+	for s, p := range c.pending {
+		if d := s - seq; d < 128 {
+			frames = append(frames, p.frame)
+		}
+	}
+	c.mu.Unlock()
+	sort.Slice(frames, func(i, j int) bool { return frames[i].OSeqno-seq < frames[j].OSeqno-seq })
+	for _, f := range frames {
+		if err := c.resend(f); err != nil {
+			c.client.log.Warn("vnak resend", "call", c.localNo, "frame", f, "err", err)
+			return
+		}
+	}
+}
+
+// stopRetransmits ends all retransmission: nothing more is pending and
+// nothing more is tracked.
+func (c *Call) stopRetransmits() {
+	c.mu.Lock()
+	c.stopRetransmitsLocked()
+	c.mu.Unlock()
+}
+
+func (c *Call) stopRetransmitsLocked() {
+	c.closed = true
+	for seq, p := range c.pending {
+		p.timer.Stop()
+		delete(c.pending, seq)
+	}
+}
+
+// fail ends the call on our side because the peer stopped acknowledging
+// (err says which frame went unanswered): retransmission stops, failed is
+// closed for await, waitAck and run, and a lingering call is released.
+func (c *Call) fail(err error) {
+	c.mu.Lock()
+	if c.err != nil {
+		c.mu.Unlock()
+		return
+	}
+	c.err = err
+	c.stopRetransmitsLocked()
+	linger := c.linger
+	c.mu.Unlock()
+	close(c.failed)
+	c.client.log.Warn("call failed", "call", c.localNo, "err", err)
+	if linger {
+		c.client.release(c)
+	}
+}
+
+// end finishes the call for its user: state Down, Events and Done closed.
+// The call number is released at once, or once a final frame still awaiting
+// its ACK (HANGUP, REJECT) has been acknowledged or given up on.
+func (c *Call) end() {
+	c.mu.Lock()
+	c.state = StateDown
+	release := len(c.pending) == 0 || c.closed
+	c.linger = !release
+	c.mu.Unlock()
+	close(c.Events)
+	close(c.done)
+	if release {
+		c.client.release(c)
+	}
+}
+
+// frameName names a full frame for messages: NEW, ANSWER, DTMF_END...
+func frameName(f *FullFrame) string {
+	switch f.Type {
+	case FrameIAX:
+		return IAXSubclass(f.Subclass).String()
+	case FrameControl:
+		return ControlSubclass(f.Subclass).String()
+	default:
+		return f.Type.String()
+	}
+}
+
+// await waits for an IAX frame whose subclass is one of want, while sent
+// is retransmitted until the peer replies. INVAL, REJECT, REGREJ and
+// HANGUP end the wait with an error, and so does the end of retransmission.
 //
 // Call tokens: a first-contact frame (NEW, REGREQ, REGREL, POKE) carries an
 // empty CALLTOKEN IE to say we support them. The server then answers with a
@@ -292,25 +463,14 @@ const (
 // chan_iax2 does. A frame with no CALLTOKEN IE at all is rejected by
 // default (requirecalltoken=yes).
 func (c *Call) await(ctx context.Context, sent *FullFrame, want ...IAXSubclass) (*FullFrame, error) {
-	retry := time.NewTimer(retransmitInterval)
-	defer retry.Stop()
-	attempts := 1
 	for {
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case <-c.client.done:
 			return nil, net.ErrClosed
-		case <-retry.C:
-			if attempts >= retransmitAttempts {
-				return nil, fmt.Errorf("iax2: no reply to %s from %s after %d attempts",
-					IAXSubclass(sent.Subclass), c.client.server, attempts)
-			}
-			attempts++
-			if err := c.resend(sent); err != nil {
-				return nil, err
-			}
-			retry.Reset(retransmitInterval)
+		case <-c.failed:
+			return nil, c.Err()
 		case f := <-c.inbox:
 			if f.Type != FrameIAX {
 				continue
@@ -335,7 +495,11 @@ func (c *Call) await(ctx context.Context, sent *FullFrame, want ...IAXSubclass) 
 				if err != nil {
 					return nil, err
 				}
+				// The pending copy is the same frame: its retransmissions
+				// carry the token from now on.
+				c.mu.Lock()
 				sent.Data = with
+				c.mu.Unlock()
 				if err := c.client.send(sent); err != nil {
 					return nil, err
 				}
@@ -369,12 +533,11 @@ func withCallToken(data []byte, tok IE) ([]byte, error) {
 }
 
 // handleFull processes an inbound full frame addressed to this call. It
-// learns the peer's call number, advances the inbound sequence number,
-// answers PING and LAGRQ itself, delivers voice, acknowledges every other
-// sequenced frame and queues signalling for await/run.
-//
-// TODO: out-of-order detection (VNAK), duplicate suppression, ACK matching
-// against pending.
+// learns the peer's call number, retires the frames the peer acknowledges,
+// checks the inbound sequence number (a repeat is acknowledged again and
+// dropped, a gap is reported with VNAK), answers PING, LAGRQ and VNAK
+// itself, delivers voice, acknowledges every other sequenced frame and
+// queues signalling for await/run.
 func (c *Call) handleFull(f *FullFrame) {
 	// A CALLTOKEN reply comes from a fake call number 1 before the server
 	// has created a call: it must not teach us anything.
@@ -388,13 +551,49 @@ func (c *Call) handleFull(f *FullFrame) {
 		c.remoteNo = f.SrcCall
 		c.client.bindRemote(c)
 	}
+	release := false
+	if f.Type == FrameIAX && IAXSubclass(f.Subclass) == IAXInval {
+		// The peer has no such call: nothing of ours will be acknowledged.
+		c.stopRetransmitsLocked()
+		release = c.linger
+	} else {
+		release = c.acknowledgedLocked(f.ISeqno)
+	}
 	if sequenced(f) {
-		c.iseqno = f.OSeqno + 1
+		switch d := c.iseqno - f.OSeqno; {
+		case d == 0:
+			c.iseqno = f.OSeqno + 1
+		case d < 128:
+			// Already received: our ACK or reply was lost on the way.
+			c.mu.Unlock()
+			c.client.log.Debug("repeat", "call", c.localNo, "frame", f)
+			if err := c.sendAck(f); err != nil {
+				c.client.log.Warn("ack", "err", err)
+			}
+			return
+		default:
+			// Frames before this one are missing: ask for them, once per
+			// gap; the peer's own timer resends them anyway.
+			expected := c.iseqno
+			ask := !c.vnakSent || c.vnak != expected
+			c.vnak, c.vnakSent = expected, true
+			c.mu.Unlock()
+			c.client.log.Debug("gap", "call", c.localNo, "expected", expected, "frame", f)
+			if ask {
+				if _, err := c.sendFullTS(FrameIAX, uint64(IAXVnak), f.Timestamp, nil); err != nil {
+					c.client.log.Warn("vnak", "err", err)
+				}
+			}
+			return
+		}
 	}
 	if f.Timestamp > c.lastTS {
 		c.lastTS = f.Timestamp
 	}
 	c.mu.Unlock()
+	if release {
+		c.client.release(c)
+	}
 
 	// Frames we answer with a sequenced reply are acknowledged by that reply
 	// (its ISeqno), as in chan_iax2; everything else sequenced gets an ACK.
@@ -402,6 +601,11 @@ func (c *Call) handleFull(f *FullFrame) {
 	switch f.Type {
 	case FrameIAX:
 		switch IAXSubclass(f.Subclass) {
+		case IAXAck:
+			return // bookkeeping only, done above
+		case IAXVnak:
+			c.resendFrom(f.ISeqno)
+			return
 		case IAXAuthReq, IAXRegAuth, IAXNew, IAXAuthRep:
 			answered = true
 		case IAXAccept:
@@ -482,12 +686,7 @@ func (c *Call) deliverMedia(ts uint32, format Format, data []byte) {
 // run consumes signalling after the call is accepted, until it ends. It is
 // the only writer and the closer of Events.
 func (c *Call) run() {
-	defer func() {
-		c.setState(StateDown)
-		c.client.release(c)
-		close(c.Events)
-		close(c.done)
-	}()
+	defer c.end()
 	emit := func(ev Event) {
 		select {
 		case c.Events <- ev:
@@ -501,15 +700,19 @@ func (c *Call) run() {
 			return
 		case <-c.client.done:
 			return
+		case <-c.failed:
+			// The peer stopped answering. Tell it once, in case it is
+			// only deaf, as chan_iax2 does ("Destination out of order").
+			ies := IEs{StringIE(IECause, CauseText(CauseOutOfOrder)), Uint8IE(IECauseCode, CauseOutOfOrder)}
+			if data, err := ies.Encode(); err == nil {
+				_, _ = c.sendFull(FrameIAX, uint64(IAXHangup), data)
+			}
+			emit(Event{Kind: EventHangup, Cause: "no reply", CauseCode: CauseLocal})
+			return
 		case f := <-c.inbox:
 			switch f.Type {
 			case FrameIAX:
 				switch IAXSubclass(f.Subclass) {
-				case IAXAck:
-					select {
-					case c.acks <- f.ISeqno:
-					default:
-					}
 				case IAXHangup, IAXReject, IAXInval:
 					ev := Event{Kind: EventHangup, Cause: IAXSubclass(f.Subclass).String()}
 					if ies, err := f.IEs(); err == nil {
@@ -694,8 +897,8 @@ func (c *Call) dtmf(typ FrameType, digit byte) error {
 	if err != nil {
 		return err
 	}
-	if err := c.waitAck(f); err != nil {
-		return fmt.Errorf("iax2: %s %c not acknowledged by %s", typ, digit, c.client.server)
+	if err := c.waitAck(f, 0); err != nil {
+		return fmt.Errorf("iax2: %s %c not acknowledged by %s: %w", typ, digit, c.client.server, err)
 	}
 	return nil
 }
@@ -705,7 +908,7 @@ func (c *Call) dtmf(typ FrameType, digit byte) error {
 var ErrNotRinging = errors.New("iax2: call is not ringing")
 
 // Answer accepts an incoming call: it sends CONTROL/ANSWER, waits for its
-// ACK (resending once) and delivers the peer's voice frames to media.
+// ACK and delivers the peer's voice frames to media.
 func (c *Call) Answer(media chan<- MediaFrame) error {
 	c.mu.Lock()
 	if c.outgoing || c.state != StateRinging {
@@ -719,15 +922,21 @@ func (c *Call) Answer(media chan<- MediaFrame) error {
 	if err != nil {
 		return err
 	}
-	if err := c.waitAck(f); err != nil {
-		return fmt.Errorf("iax2: ANSWER not acknowledged by %s", c.client.server)
+	if err := c.waitAck(f, 0); err != nil {
+		return fmt.Errorf("iax2: ANSWER not acknowledged by %s: %w", c.client.server, err)
 	}
 	return nil
 }
 
-// Hangup ends the call: it sends HANGUP with the cause, waits briefly for
-// the ACK (resending once) and stops the call. It is safe to call more than
-// once and after the peer hung up.
+// hangupPatience is how long Hangup waits for the ACK of its HANGUP before
+// returning; retransmission goes on behind it until the ACK arrives or
+// gives up, and the call number is held until then.
+const hangupPatience = 2 * time.Second
+
+// Hangup ends the call: it sends HANGUP with the cause and stops the call
+// at once (Events and Done are closed), then waits up to hangupPatience
+// for the server's ACK; the HANGUP is retransmitted until acknowledged
+// either way. It is safe to call more than once and after the peer hung up.
 func (c *Call) Hangup(cause uint8) error {
 	c.mu.Lock()
 	if c.state == StateDown || c.state == StateHangupSent || c.state == StateIdle {
@@ -736,7 +945,6 @@ func (c *Call) Hangup(cause uint8) error {
 	}
 	c.state = StateHangupSent
 	c.mu.Unlock()
-	defer c.stopOnce.Do(func() { close(c.stop) })
 
 	ies := IEs{StringIE(IECause, CauseText(cause)), Uint8IE(IECauseCode, cause)}
 	data, err := ies.Encode()
@@ -744,11 +952,12 @@ func (c *Call) Hangup(cause uint8) error {
 		return err
 	}
 	f, err := c.sendFull(FrameIAX, uint64(IAXHangup), data)
+	c.stopOnce.Do(func() { close(c.stop) })
 	if err != nil {
 		return err
 	}
-	if err := c.waitAck(f); err != nil {
-		return fmt.Errorf("iax2: HANGUP not acknowledged by %s", c.client.server)
+	if err := c.waitAck(f, hangupPatience); err != nil {
+		return fmt.Errorf("iax2: HANGUP not acknowledged by %s: %w", c.client.server, err)
 	}
 	return nil
 }
@@ -756,32 +965,35 @@ func (c *Call) Hangup(cause uint8) error {
 // errNoAck is returned by waitAck when the peer never acknowledged.
 var errNoAck = errors.New("no ack")
 
-// waitAck waits for the ACK of f (an ACK whose ISeqno is past f's OSeqno)
-// while run is consuming signalling, resending f once. It returns nil if
-// the call ended meanwhile.
-func (c *Call) waitAck(f *FullFrame) error {
-	for attempt := 0; attempt < 2; attempt++ {
-		timer := time.NewTimer(retransmitInterval)
-		for {
-			select {
-			case iseq := <-c.acks:
-				if iseq == f.OSeqno+1 {
-					timer.Stop()
-					return nil
-				}
-				continue
-			case <-timer.C:
-			case <-c.done:
-				timer.Stop()
-				return nil
-			}
-			break
-		}
-		if attempt == 0 {
-			if err := c.resend(f); err != nil {
-				return err
-			}
-		}
+// waitAck blocks until the peer has acknowledged f, which is retransmitted
+// meanwhile. Without a patience it also returns, with nil, when the call
+// ends, and with the error when retransmission gives up. With one it
+// returns errNoAck after that long, leaving the retransmissions to go on:
+// what Hangup wants, as the call is already over for its user.
+func (c *Call) waitAck(f *FullFrame, patience time.Duration) error {
+	c.mu.Lock()
+	p := c.pending[f.OSeqno]
+	c.mu.Unlock()
+	if p == nil {
+		return nil // acknowledged already, or not tracked (call released)
 	}
-	return errNoAck
+	var expired <-chan time.Time
+	var done <-chan struct{}
+	if patience > 0 {
+		timer := time.NewTimer(patience)
+		defer timer.Stop()
+		expired = timer.C
+	} else {
+		done = c.done
+	}
+	select {
+	case <-p.acked:
+		return nil
+	case <-c.failed:
+		return c.Err()
+	case <-done:
+		return nil
+	case <-expired:
+		return errNoAck
+	}
 }

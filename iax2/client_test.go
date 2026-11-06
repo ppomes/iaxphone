@@ -23,8 +23,10 @@ package iax2
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/netip"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -63,7 +65,9 @@ func TestConfigDefaults(t *testing.T) {
 }
 
 // fakeServer answers POKE and REGREQ/REGREL the way chan_iax2 does and
-// records the frames it receives.
+// records the frames it receives. Like chan_iax2 it acknowledges again a
+// sequenced frame it has already processed (the client's retransmission of
+// a frame whose ACK was lost) and can be made to lose frames.
 type fakeServer struct {
 	conn   *net.UDPConn
 	frames chan *FullFrame
@@ -77,6 +81,16 @@ type fakeServer struct {
 	hangupAfter time.Duration
 	// wrongSecret: answer the client's AUTHREQ with a bad MD5 response.
 	wrongSecret bool
+	// lose is asked about every frame from the client; true drops it as if
+	// the network had, before it is recorded.
+	lose func(*FullFrame) bool
+	// loseAcks drops that many of the server's ACKs of CONTROL and DTMF
+	// frames (not of the PONG that may be in flight when a test sets it).
+	loseAcks atomic.Int32
+	// deaf makes the server ignore everything from now on (it still records).
+	deaf atomic.Bool
+	// seen holds the sequenced frames processed, to re-ack their repeats.
+	seen map[string]bool
 }
 
 // originate sends a NEW to the client, as chan_iax2 does for Dial(IAX2/peer).
@@ -120,7 +134,8 @@ func newFakeServer(t *testing.T, opts ...func(*fakeServer)) *fakeServer {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := &fakeServer{conn: conn, frames: make(chan *FullFrame, 16), secret: "s3cret", challenge: "424242", requireToken: true}
+	s := &fakeServer{conn: conn, frames: make(chan *FullFrame, 64), secret: "s3cret", challenge: "424242", requireToken: true,
+		seen: make(map[string]bool)}
 	for _, o := range opts {
 		o(s)
 	}
@@ -144,11 +159,18 @@ func (s *fakeServer) loop() {
 		if !ok {
 			continue
 		}
+		if s.lose != nil && s.lose(full) {
+			continue
+		}
 		s.frames <- full
-		if full.Retransmit {
+		if s.deaf.Load() {
 			continue
 		}
 		reply := func(sub IAXSubclass, oseq uint8, ies IEs) {
+			if sub == IAXAck && full.Type != FrameIAX && s.loseAcks.Load() > 0 {
+				s.loseAcks.Add(-1)
+				return
+			}
 			data, _ := ies.Encode()
 			f := &FullFrame{
 				SrcCall: 0x1234, DstCall: full.SrcCall, Timestamp: full.Timestamp,
@@ -156,6 +178,16 @@ func (s *fakeServer) loop() {
 			}
 			b, _ := Encode(f)
 			_, _ = s.conn.WriteToUDP(b, from)
+		}
+		if sequenced(full) {
+			// The same frame again (same data: a NEW resent with its call
+			// token is a new frame) was answered already: ACK it again.
+			key := fmt.Sprintf("%d/%d/%x", full.SrcCall, full.OSeqno, full.Data)
+			if s.seen[key] {
+				reply(IAXAck, full.ISeqno, nil)
+				continue
+			}
+			s.seen[key] = true
 		}
 		if full.Type == FrameControl || full.Type == FrameDTMFBegin || full.Type == FrameDTMFEnd {
 			reply(IAXAck, full.ISeqno, nil) // RINGING, ANSWER of a call we originated, DTMF
@@ -172,7 +204,7 @@ func (s *fakeServer) loop() {
 				secret = "wrong"
 			}
 			reply(IAXAuthRep, 1, IEs{StringIE(IEMD5Result, MD5Response(ies.String(IEChallenge), secret))})
-		case IAXAccept:
+		case IAXAccept, IAXReject, IAXPong, IAXLagRp:
 			reply(IAXAck, full.ISeqno, nil)
 		case IAXPoke:
 			reply(IAXPong, 0, nil)

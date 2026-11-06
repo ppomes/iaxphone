@@ -40,7 +40,7 @@ Early skeleton. What exists today:
 - [x] MD5 challenge/response
 - [x] G.711 µ-law and A-law
 - [x] UDP transport, POKE/PONG liveness check (`iaxphone ping`), verified against Asterisk 23
-- [ ] retransmission timers for every full frame, VNAK, INVAL replies
+- [x] reliable full frames: every sequenced frame is retransmitted until acknowledged (1 s apart, 4 attempts, then the call ends with "no reply"), repeats are acknowledged again and dropped, a gap asks for the missing frames with VNAK and a VNAK from the peer is answered, frames for unknown calls get INVAL; verified against Asterisk 23 through a relay losing 40 % of the full frames
 - [x] registration (REGREQ / REGAUTH / REGACK), refresh and REGREL, verified against Asterisk 23
 - [x] outgoing calls (NEW / AUTHREQ / ACCEPT / ANSWER / HANGUP), voice in both directions, verified against Asterisk 23 (echo and tone tests)
 - [x] incoming calls (NEW / AUTHREQ / ACCEPT / RINGING / ANSWER), caller authentication, verified against Asterisk 23

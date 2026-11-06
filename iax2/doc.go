@@ -33,6 +33,6 @@
 // Meta frames (trunking, video) are not supported.
 //
 // The package is split in layers: frame.go and ie.go are pure encoding with
-// no I/O, call.go holds the per-call state machine, and client.go owns the
-// UDP socket, the call table and retransmissions.
+// no I/O, call.go holds the per-call state machine, sequence numbers and
+// retransmissions, and client.go owns the UDP socket and the call table.
 package iax2
