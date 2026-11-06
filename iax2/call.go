@@ -89,8 +89,11 @@ type Event struct {
 	Kind      EventKind
 	Cause     string // CAUSE IE for EventHangup
 	CauseCode uint8  // CAUSECODE IE for EventHangup
-	Digit     byte   // '0'-'9', '*', '#' or 'A'-'D' for EventDTMF
-	Number    string // CALLED_NUMBER IE for EventTransfer
+	// Local is set on an EventHangup raised by this side (the peer stopped
+	// answering) rather than received from the peer.
+	Local  bool
+	Digit  byte   // '0'-'9', '*', '#' or 'A'-'D' for EventDTMF
+	Number string // CALLED_NUMBER IE for EventTransfer
 }
 
 // MediaFrame is one encoded voice frame received from the peer.
@@ -731,7 +734,7 @@ func (c *Call) run() {
 			if data, err := ies.Encode(); err == nil {
 				_, _ = c.sendFull(FrameIAX, uint64(IAXHangup), data)
 			}
-			emit(Event{Kind: EventHangup, Cause: "no reply", CauseCode: CauseLocal})
+			emit(Event{Kind: EventHangup, Cause: "no reply", CauseCode: CauseLocal, Local: true})
 			return
 		case f := <-c.inbox:
 			switch f.Type {

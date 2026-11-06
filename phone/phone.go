@@ -160,9 +160,13 @@ type CallInfo struct {
 
 	// Set in EventEnded.
 	HungUpByUs bool
-	Cause      string // the peer's hangup cause, or why the call failed
-	Err        error  // non-nil when the call failed (rejected, timeout...)
-	Stats      audio.Stats
+	// Transferred says the server hung up on us after our transfer request
+	// (TransferredTo). It stays false when the call ended some other way:
+	// hung up by us, or lost because the server stopped answering.
+	Transferred bool
+	Cause       string // the peer's hangup cause, or why the call failed
+	Err         error  // non-nil when the call failed (rejected, timeout...)
+	Stats       audio.Stats
 }
 
 // TalkTime is how long the call has been (or was) answered.
@@ -236,6 +240,9 @@ type activeCall struct {
 	media  chan iax2.MediaFrame
 	dev    audio.Device
 	engine *audio.Engine
+	// peerHangup is set when the peer hung up on us, as opposed to the
+	// call being dropped for lack of a reply.
+	peerHangup bool
 }
 
 // New creates a phone; Start opens the socket.
@@ -876,6 +883,7 @@ func (p *Phone) watch(ac *activeCall) {
 				if ev.CauseCode != 0 {
 					ac.info.Cause = fmt.Sprintf("%s (%d)", ev.Cause, ev.CauseCode)
 				}
+				ac.peerHangup = !ev.Local
 				p.mu.Unlock()
 			}
 		}
@@ -915,6 +923,8 @@ func (p *Phone) endCall(ac *activeCall, err error) {
 	case err != nil:
 		ac.info.Err = err
 		ac.info.Cause = err.Error()
+	case ac.peerHangup:
+		ac.info.Transferred = ac.info.TransferredTo != ""
 	}
 	info := ac.info
 	p.mu.Unlock()

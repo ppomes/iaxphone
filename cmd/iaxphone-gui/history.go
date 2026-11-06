@@ -47,7 +47,7 @@ func historyEntry(c phone.CallInfo, now time.Time) history.Entry {
 	if c.Err != nil {
 		e.Cause = c.Err.Error()
 	}
-	if c.TransferredTo != "" && !c.HungUpByUs {
+	if c.Transferred {
 		e.Cause = "transferred to " + c.TransferredTo
 	}
 	return e

@@ -215,6 +215,37 @@ func TestWindowDrivesCalls(t *testing.T) {
 	}
 }
 
+// The summary and the history say "transferred" only when the server hung
+// up on us after our transfer request, not when the call ended otherwise.
+func TestEndedAfterTransferRequest(t *testing.T) {
+	now := time.Now()
+	base := phone.CallInfo{Outgoing: true, Number: "600", State: phone.CallEnded,
+		Started: now.Add(-time.Minute), Answered: now.Add(-30 * time.Second), TransferredTo: "601"}
+	done := base
+	done.Transferred, done.Cause = true, "Normal Clearing (16)"
+	lost := base
+	lost.Cause = "no reply"
+	byUs := base
+	byUs.HungUpByUs, byUs.Cause = true, "hung up"
+	for _, tc := range []struct {
+		name  string
+		c     phone.CallInfo
+		how   string
+		cause string
+	}{
+		{"transferred", done, "transferred to 601", "transferred to 601"},
+		{"lost", lost, "ended by the peer (no reply)", "no reply"},
+		{"hung up by us", byUs, "ended by us (hung up)", "hung up"},
+	} {
+		if got := endedText(tc.c); !strings.Contains(got, "Call to 600 "+tc.how+", ") {
+			t.Errorf("%s: summary %q", tc.name, got)
+		}
+		if got := historyEntry(tc.c, now).Cause; got != tc.cause {
+			t.Errorf("%s: history cause %q, want %q", tc.name, got, tc.cause)
+		}
+	}
+}
+
 func TestSettingsRoundTrip(t *testing.T) {
 	a := test.NewApp()
 	s := settings{Server: "pbx:4569", Username: "u", Secret: "s", CallerNumber: "12", CallerName: "n",

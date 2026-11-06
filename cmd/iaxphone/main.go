@@ -343,10 +343,10 @@ func printEnded(ci phone.CallInfo) {
 	}
 	st := ci.Stats
 	switch {
-	case ci.TransferredTo != "" && !ci.HungUpByUs:
+	case ci.Transferred:
 		fmt.Printf("%s %s: %s, transferred to %s (%s)\n", direction, ci.Number, ci.Format, ci.TransferredTo, ci.Cause)
 	case ci.TransferredTo != "":
-		fmt.Printf("%s %s: %s, hung up by us (%s) after asking for a transfer to %s\n", direction, ci.Number, ci.Format, ci.Cause, ci.TransferredTo)
+		fmt.Printf("%s %s: %s, hung up by %s (%s) after asking for a transfer to %s\n", direction, ci.Number, ci.Format, by, ci.Cause, ci.TransferredTo)
 	default:
 		fmt.Printf("%s %s: %s, hung up by %s (%s)\n", direction, ci.Number, ci.Format, by, ci.Cause)
 	}

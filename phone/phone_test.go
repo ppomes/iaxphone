@@ -484,6 +484,15 @@ func TestServerGoesDeaf(t *testing.T) {
 		t.Fatal(err)
 	}
 	next(t, p, EventAnswered)
+	// A transfer request the server takes but does not act on (the call is
+	// not bridged): the call goes on, and its loss is not a transfer.
+	srv.Unbridged(true)
+	if err := p.Transfer("601"); err != nil {
+		t.Fatal(err)
+	}
+	if ci, ok := p.Call(); !ok || ci.State != CallActive || ci.TransferredTo != "601" {
+		t.Errorf("after the unbridged transfer: %+v (%v)", ci, ok)
+	}
 	srv.Deaf(true)
 	start := time.Now()
 	if err := p.SendDTMF('1'); err == nil || !strings.Contains(err.Error(), "no reply to DTMF_BEGIN") {
@@ -507,7 +516,8 @@ func TestServerGoesDeaf(t *testing.T) {
 	if took := time.Since(start); took < 3*time.Second || took > 6*time.Second {
 		t.Errorf("call ended after %s", took)
 	}
-	if ev.Call.HungUpByUs || ev.Call.Cause != "no reply" || ev.Call.Err != nil || ev.Call.State != CallEnded {
+	if ev.Call.HungUpByUs || ev.Call.Cause != "no reply" || ev.Call.Err != nil || ev.Call.State != CallEnded ||
+		ev.Call.TransferredTo != "601" || ev.Call.Transferred {
 		t.Errorf("ended %+v", ev.Call)
 	}
 	if _, ok := p.Call(); ok {
@@ -518,6 +528,34 @@ func TestServerGoesDeaf(t *testing.T) {
 		t.Fatalf("Dial after the failure: %v", err)
 	}
 	next(t, p, EventAnswered)
+}
+
+// A transfer request the server takes without acting on, followed by our
+// own hangup: not a transfer either.
+func TestTransferThenHangup(t *testing.T) {
+	srv := fakeiax.New(t)
+	p := startPhone(t, srv, false)
+	if err := p.Dial("600"); err != nil {
+		t.Fatal(err)
+	}
+	next(t, p, EventAnswered)
+	srv.Unbridged(true)
+	if err := p.Transfer("602"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := p.Call(); !ok {
+		t.Fatal("call gone after an unbridged transfer")
+	}
+	if err := p.Hangup(); err != nil {
+		t.Fatal(err)
+	}
+	ev := next(t, p, EventEnded)
+	if !ev.Call.HungUpByUs || ev.Call.TransferredTo != "602" || ev.Call.Transferred || ev.Call.Cause != "hung up" {
+		t.Errorf("ended %+v", ev.Call)
+	}
+	if got := srv.Transfers(); len(got) != 1 || got[0] != "602" {
+		t.Errorf("server saw transfers %q", got)
+	}
 }
 
 // Hold stops our audio and tells the server, Unhold resumes; the peer's
@@ -592,7 +630,7 @@ func TestHoldAndTransfer(t *testing.T) {
 		t.Fatal(err)
 	}
 	ev = next(t, p, EventEnded)
-	if ev.Call.TransferredTo != "601" || ev.Call.HungUpByUs || ev.Call.Err != nil || ev.Call.Cause != "Normal Clearing (16)" {
+	if ev.Call.TransferredTo != "601" || !ev.Call.Transferred || ev.Call.HungUpByUs || ev.Call.Err != nil || ev.Call.Cause != "Normal Clearing (16)" {
 		t.Errorf("ended %+v", ev.Call)
 	}
 	if got := srv.Transfers(); len(got) != 1 || got[0] != "601" {

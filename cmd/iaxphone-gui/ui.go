@@ -318,7 +318,7 @@ func endedText(c phone.CallInfo) string {
 		by = "us"
 	}
 	how := fmt.Sprintf("ended by %s (%s)", by, c.Cause)
-	if c.TransferredTo != "" && !c.HungUpByUs {
+	if c.Transferred {
 		how = "transferred to " + c.TransferredTo
 	}
 	st := c.Stats
