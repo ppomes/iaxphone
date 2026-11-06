@@ -94,7 +94,8 @@ func TestWindowDrivesCalls(t *testing.T) {
 		t.Fatal(err)
 	}
 	us := net.JoinHostPort("127.0.0.1", port)
-	if g.callBtn.Disabled() || !g.hangupBtn.Disabled() || !g.answerBtn.Disabled() || !g.mute.Disabled() {
+	if g.callBtn.Disabled() || !g.hangupBtn.Disabled() || !g.answerBtn.Disabled() || !g.mute.Disabled() ||
+		!g.hold.Disabled() || !g.transfer.Disabled() {
 		t.Error("idle: wrong buttons")
 	}
 	if g.trayStateNow() != trayIdle {
@@ -102,7 +103,8 @@ func TestWindowDrivesCalls(t *testing.T) {
 	}
 
 	// Outgoing call: keypad fills the number, Call dials, keypad then
-	// sends DTMF, the peer's keys are shown, Hang up ends it.
+	// sends DTMF, the peer's keys are shown, Hold holds, Transfer sends
+	// the peer elsewhere and the server ends the call.
 	test.Tap(g.keypad[5]) // "6"
 	test.Type(g.number, "00")
 	if g.number.Text != "600" {
@@ -110,7 +112,8 @@ func TestWindowDrivesCalls(t *testing.T) {
 	}
 	test.Tap(g.callBtn)
 	pump(t, g, p, "call up", hasText(g.callStatus, "In call with 600 · ulaw · 0:0"))
-	if !g.callBtn.Disabled() || g.hangupBtn.Disabled() || !g.answerBtn.Disabled() || g.mute.Disabled() {
+	if !g.callBtn.Disabled() || g.hangupBtn.Disabled() || !g.answerBtn.Disabled() || g.mute.Disabled() ||
+		g.hold.Disabled() || g.transfer.Disabled() {
 		t.Error("in call: wrong buttons")
 	}
 	if g.trayStateNow() != trayInCall {
@@ -138,13 +141,24 @@ func TestWindowDrivesCalls(t *testing.T) {
 	if !g.phone.Muted() {
 		t.Error("not muted")
 	}
-	test.Tap(g.hangupBtn)
-	pump(t, g, p, "call ended", hasText(g.details, "Call to 600 ended by us (hung up), ulaw"))
-	if g.callStatus.Text != "Idle" || g.keys.Text != "" || g.callBtn.Disabled() || !g.hangupBtn.Disabled() {
-		t.Errorf("after hangup: status %q keys %q", g.callStatus.Text, g.keys.Text)
+	test.Tap(g.hold)
+	pump(t, g, p, "on hold", hasText(g.callStatus, " · on hold"))
+	if !srv.Held() {
+		t.Error("server not held")
 	}
-	if causes := srv.HangupCauses(); len(causes) != 1 || causes[0] != "Normal Clearing" {
-		t.Errorf("server saw %q", causes)
+	test.Tap(g.hold)
+	pump(t, g, p, "off hold", func() bool { return !strings.Contains(g.callStatus.Text, "on hold") })
+	if srv.Held() {
+		t.Error("server still held")
+	}
+	g.number.SetText("601")
+	test.Tap(g.transfer)
+	pump(t, g, p, "transferred", hasText(g.details, "Call to 600 transferred to 601, ulaw"))
+	if g.callStatus.Text != "Idle" || g.keys.Text != "" || g.callBtn.Disabled() || !g.hangupBtn.Disabled() || g.hold.Checked {
+		t.Errorf("after transfer: status %q keys %q hold %v", g.callStatus.Text, g.keys.Text, g.hold.Checked)
+	}
+	if got := srv.Transfers(); len(got) != 1 || got[0] != "601" {
+		t.Errorf("server saw transfers %q", got)
 	}
 
 	// Incoming call: Answer, then the peer hangs up.
@@ -161,6 +175,16 @@ func TestWindowDrivesCalls(t *testing.T) {
 	if g.mute.Checked {
 		t.Error("mute not reset for the new call")
 	}
+	// The server asks us to call 777 instead: shown, and put in the entry
+	// only when nothing is being typed there.
+	srv.Transfer("777")
+	pump(t, g, p, "transfer request", hasText(g.callStatus, "Asked to call 777 instead"))
+	if g.number.Text != "601" {
+		t.Errorf("number being typed replaced by %q", g.number.Text)
+	}
+	g.number.SetText("")
+	srv.Transfer("778")
+	pump(t, g, p, "second transfer request", func() bool { return g.number.Text == "778" })
 	srv.Hangup()
 	pump(t, g, p, "peer hangup", hasText(g.details, "Call from Asterisk <1001> ended by the peer (Normal Clearing (16))"))
 
@@ -169,7 +193,7 @@ func TestWindowDrivesCalls(t *testing.T) {
 	pump(t, g, p, "incoming again", hasText(g.callStatus, "Incoming call"))
 	test.Tap(g.hangupBtn)
 	pump(t, g, p, "declined", hasText(g.details, "ended by us"))
-	if causes := srv.HangupCauses(); len(causes) != 2 || causes[1] != "Call Rejected" {
+	if causes := srv.HangupCauses(); len(causes) != 1 || causes[0] != "Call Rejected" {
 		t.Errorf("server saw %q", causes)
 	}
 
@@ -177,7 +201,7 @@ func TestWindowDrivesCalls(t *testing.T) {
 	// the list puts its number back in the entry.
 	h := g.history.Entries()
 	if len(h) != 3 || !h[0].Missed() || h[0].Name != "Asterisk" || h[1].Outgoing || !h[1].Answered ||
-		!h[2].Outgoing || !h[2].Answered || h[2].Number != "600" || h[2].Cause != "hung up" || h[0].Cause != "hung up" {
+		!h[2].Outgoing || !h[2].Answered || h[2].Number != "600" || h[2].Cause != "transferred to 601" || h[0].Cause != "hung up" {
 		t.Fatalf("history %+v", h)
 	}
 	g.number.SetText("")
@@ -188,6 +212,37 @@ func TestWindowDrivesCalls(t *testing.T) {
 	g.historyList.Select(2)
 	if g.number.Text != "600" {
 		t.Errorf("number after pick %q", g.number.Text)
+	}
+}
+
+// The summary and the history say "transferred" only when the server hung
+// up on us after our transfer request, not when the call ended otherwise.
+func TestEndedAfterTransferRequest(t *testing.T) {
+	now := time.Now()
+	base := phone.CallInfo{Outgoing: true, Number: "600", State: phone.CallEnded,
+		Started: now.Add(-time.Minute), Answered: now.Add(-30 * time.Second), TransferredTo: "601"}
+	done := base
+	done.Transferred, done.Cause = true, "Normal Clearing (16)"
+	lost := base
+	lost.Cause = "no reply"
+	byUs := base
+	byUs.HungUpByUs, byUs.Cause = true, "hung up"
+	for _, tc := range []struct {
+		name  string
+		c     phone.CallInfo
+		how   string
+		cause string
+	}{
+		{"transferred", done, "transferred to 601", "transferred to 601"},
+		{"lost", lost, "ended by the peer (no reply)", "no reply"},
+		{"hung up by us", byUs, "ended by us (hung up)", "hung up"},
+	} {
+		if got := endedText(tc.c); !strings.Contains(got, "Call to 600 "+tc.how+", ") {
+			t.Errorf("%s: summary %q", tc.name, got)
+		}
+		if got := historyEntry(tc.c, now).Cause; got != tc.cause {
+			t.Errorf("%s: history cause %q, want %q", tc.name, got, tc.cause)
+		}
 	}
 }
 

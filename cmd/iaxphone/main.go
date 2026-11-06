@@ -65,6 +65,8 @@ func run() error {
 		answer   = flag.Duration("auto-answer", 2*time.Second, "ring this long before answering an incoming call")
 		dtmf     = flag.String("dtmf", "", "keys to press one second after the call is answered")
 		hold     = flag.Duration("hold", iax2.DTMFDuration, "how long each -dtmf key is held")
+		onhold   = flag.Duration("onhold", 0, "put the call on hold for this long, after the -dtmf keys")
+		transfer = flag.String("transfer", "", "transfer the call to this number, after -dtmf and -onhold")
 		verbose  = flag.Bool("v", false, "log every full frame and the audio levels")
 	)
 	flag.Usage = func() {
@@ -127,7 +129,8 @@ func run() error {
 	defer p.Close() //nolint:errcheck
 	log.Info("socket open", "local", p.LocalAddr())
 
-	ui := &console{p: p, log: log, duration: *duration, autoAnswer: *answer, dtmf: *dtmf, hold: *hold, verbose: *verbose}
+	ui := &console{p: p, log: log, duration: *duration, autoAnswer: *answer, dtmf: *dtmf, hold: *hold,
+		onhold: *onhold, transfer: *transfer, verbose: *verbose}
 	if cmd == "call" {
 		if err := p.Dial(flag.Arg(1)); err != nil {
 			return err
@@ -138,8 +141,9 @@ func run() error {
 }
 
 // console drives a Phone from the terminal: it prints events, answers
-// incoming calls after a delay and presses the -dtmf keys once a call is
-// up. There is no keyboard input yet.
+// incoming calls after a delay and, once a call is up, presses the -dtmf
+// keys, holds the call for -onhold and transfers it to -transfer. There
+// is no keyboard input yet.
 type console struct {
 	p          *phone.Phone
 	log        *slog.Logger
@@ -147,18 +151,54 @@ type console struct {
 	autoAnswer time.Duration
 	dtmf       string
 	hold       time.Duration
+	onhold     time.Duration
+	transfer   string
 	verbose    bool
 }
 
-// pressKeys presses the -dtmf keys one after the other, a second after
-// the call was answered, each held for -hold, the way a finger would: the
-// key sounds locally and DTMF_END follows the release.
-func (c *console) pressKeys(ctx context.Context) {
+// scripted reports whether there is something to do once a call is up.
+func (c *console) scripted() bool {
+	return c.dtmf != "" || c.onhold > 0 || c.transfer != ""
+}
+
+// script runs a second after the call was answered: it presses the -dtmf
+// keys one after the other, each held for -hold, the way a finger would
+// (the key sounds locally and DTMF_END follows the release), then holds
+// the call for -onhold, then transfers it to -transfer.
+func (c *console) script(ctx context.Context) {
 	select {
 	case <-ctx.Done():
 		return
 	case <-time.After(time.Second):
 	}
+	c.pressKeys(ctx)
+	if c.onhold > 0 {
+		if err := c.p.Hold(); err != nil {
+			c.log.Error("hold", "err", err)
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(c.onhold):
+		}
+		if err := c.p.Unhold(); err != nil {
+			c.log.Error("unhold", "err", err)
+			return
+		}
+	}
+	if c.transfer != "" {
+		if err := c.p.Transfer(c.transfer); err != nil {
+			c.log.Error("transfer", "err", err)
+			return
+		}
+		fmt.Printf("transferring to %s\n", c.transfer)
+	}
+}
+
+// pressKeys presses the -dtmf keys one after the other, each held for
+// -hold.
+func (c *console) pressKeys(ctx context.Context) {
 	for i := 0; i < len(c.dtmf); i++ {
 		if err := c.p.PressKey(c.dtmf[i]); err != nil {
 			c.log.Error("dtmf", "key", string(c.dtmf[i]), "err", err)
@@ -241,11 +281,21 @@ func (c *console) loop(ctx context.Context, oneCall bool) error {
 				if c.duration > 0 {
 					hangupAt = time.After(c.duration)
 				}
-				if c.dtmf != "" {
-					go c.pressKeys(ctx)
+				if c.scripted() {
+					go c.script(ctx)
 				}
 			case phone.EventDTMF:
 				fmt.Printf("key received: %c\n", ev.Digit)
+			case phone.EventHold:
+				if ev.Call.Held {
+					fmt.Println("put on hold by the peer")
+				} else {
+					fmt.Println("on hold")
+				}
+			case phone.EventUnhold:
+				fmt.Println("off hold")
+			case phone.EventTransfer:
+				fmt.Printf("the peer asks us to call %s instead\n", ev.Number)
 			case phone.EventEnded:
 				answerAt, hangupAt = nil, nil
 				printEnded(ev.Call)
@@ -292,7 +342,14 @@ func printEnded(ci phone.CallInfo) {
 		return
 	}
 	st := ci.Stats
-	fmt.Printf("%s %s: %s, hung up by %s (%s)\n", direction, ci.Number, ci.Format, by, ci.Cause)
+	switch {
+	case ci.Transferred:
+		fmt.Printf("%s %s: %s, transferred to %s (%s)\n", direction, ci.Number, ci.Format, ci.TransferredTo, ci.Cause)
+	case ci.TransferredTo != "":
+		fmt.Printf("%s %s: %s, hung up by %s (%s) after asking for a transfer to %s\n", direction, ci.Number, ci.Format, by, ci.Cause, ci.TransferredTo)
+	default:
+		fmt.Printf("%s %s: %s, hung up by %s (%s)\n", direction, ci.Number, ci.Format, by, ci.Cause)
+	}
 	fmt.Printf("  talk time %s, voice frames sent %d, played %d, silent %d, tone %d; jitter: received %d, lost %d, late %d, dropped %d, underruns %d\n",
 		ci.TalkTime(time.Now()), st.Sent, st.Played, st.Silent, st.Tone,
 		st.Jitter.Received, st.Jitter.Lost, st.Jitter.Late, st.Jitter.Dropped, st.Jitter.Underruns)

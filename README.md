@@ -48,12 +48,12 @@ Early skeleton. What exists today:
 - [x] sound I/O (miniaudio via malgo, cgo), verified against Asterisk 23 with the system devices
 - [x] DTMF (DTMF_BEGIN / DTMF_END both ways), verified against Asterisk 23
 - [x] Keypad tones: a key sounds while it is held, and is held on the wire as long
-- [ ] hold, transfer
+- [x] hold (QUELCH / UNQUELCH with MUSICONHOLD, both ways) and blind transfer (TRANSFER, both ways), verified against Asterisk 23
 - [x] call tokens (CALLTOKEN IE), answering the server's POKE (qualify=yes)
 - [ ] AES-128 frame encryption
 - [ ] Opus (cgo, libopus)
-- [x] `phone` controller package (events, dial/answer/hangup/mute) shared by the UIs
-- [x] GUI (Fyne): dial, answer, hang up, keypad/DTMF, mute, level meters, settings, status icon, single instance, call history
+- [x] `phone` controller package (events, dial/answer/hangup/mute/hold/transfer) shared by the UIs
+- [x] GUI (Fyne): dial, answer, hang up, keypad/DTMF, mute, hold, transfer, level meters, settings, status icon, single instance, call history
 - [x] ring and ringback tones (generated locally, IAX2 carries no audio before the answer), device selection
 
 ## Building
@@ -68,8 +68,9 @@ make test
 `bin/iaxphone-gui` shows the registration state, the current call, a
 number entry and a keypad (it dials when idle and sends DTMF during a
 call; a key sounds for as long as it is held, 100 ms at least, and so is
-the DTMF), Call / Answer / Hang up, mute, peak level meters and the keys
-received. The gear opens the settings (server, account, caller id,
+the DTMF), Call / Answer / Hang up, mute, hold, peak level meters and the
+keys received. Transfer sends whoever is at the other end to the number in
+the entry (a blind transfer; the server then hangs up on us). The gear opens the settings (server, account, caller id,
 registration, jitter, sound, microphone and speaker), stored in Fyne's
 preferences for the app id
 `com.github.ppomes.iaxphone`, secret included, in clear. The clock button
@@ -112,7 +113,11 @@ Extension 600 is an echo test, 601 plays a 1004 Hz tone for 5 s and hangs up,
 602 plays "hello world", 603 reads up to four keys and presses them back
 (`-dtmf 1234` presses keys a second after the call is answered, each held for
 `-hold`, 100 ms), 604 presses `159*#` at the phone. Any other number is
-answered with the "not in service" prompt. The image is andrius/asterisk
+answered with the "not in service" prompt. `-onhold 3s` puts the call on
+hold for 3 s after the keys (Asterisk stops sending audio and plays music to
+whoever is bridged with us) and `-transfer 601` then transfers the other
+party to 601: calling `phone` from a second iaxphone and transferring it is
+the way to see a bridged call move. The image is andrius/asterisk
 plus the English core sounds, built by `make asterisk-up` from
 `docker/asterisk/Dockerfile`.
 While `register` runs it also takes incoming calls, answering them after

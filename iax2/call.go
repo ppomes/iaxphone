@@ -70,9 +70,12 @@ const (
 	EventAnswered                        // media may flow
 	EventHangup                          // peer ended the call; Events is closed after it
 	EventDTMF                            // the peer pressed a key (Event.Digit)
+	EventHold                            // the peer put us on hold (QUELCH or CONTROL/HOLD)
+	EventUnhold                          // the peer took us back
+	EventTransfer                        // the peer asks us to call Event.Number instead (TRANSFER)
 )
 
-var eventNames = [...]string{"?", "ringing", "proceeding", "answered", "hangup", "dtmf"}
+var eventNames = [...]string{"?", "ringing", "proceeding", "answered", "hangup", "dtmf", "hold", "unhold", "transfer"}
 
 func (k EventKind) String() string {
 	if int(k) < len(eventNames) {
@@ -86,7 +89,11 @@ type Event struct {
 	Kind      EventKind
 	Cause     string // CAUSE IE for EventHangup
 	CauseCode uint8  // CAUSECODE IE for EventHangup
-	Digit     byte   // '0'-'9', '*', '#' or 'A'-'D' for EventDTMF
+	// Local is set on an EventHangup raised by this side (the peer stopped
+	// answering) rather than received from the peer.
+	Local  bool
+	Digit  byte   // '0'-'9', '*', '#' or 'A'-'D' for EventDTMF
+	Number string // CALLED_NUMBER IE for EventTransfer
 }
 
 // MediaFrame is one encoded voice frame received from the peer.
@@ -128,6 +135,10 @@ type Call struct {
 
 	dtmfBegun byte // digit of the DTMF_BEGIN received and not yet ended (run only)
 	dtmfMu    sync.Mutex
+
+	onHold   bool       // we put the peer on hold (QUELCH sent): no voice is sent
+	quelched bool       // the peer put us on hold (QUELCH or HOLD received): no voice is sent
+	holdMu   sync.Mutex // Hold and Unhold, one at a time
 
 	// pending holds the sequenced full frames sent and not yet acknowledged
 	// by the peer, keyed by OSeqno, each with its retransmission timer.
@@ -628,6 +639,16 @@ func (c *Call) handleFull(f *FullFrame) {
 				c.client.log.Warn("lagrp", "err", err)
 			}
 			return
+		case IAXQuelch, IAXUnquelch:
+			// Stop (or resume) our media here, before run gets to it.
+			c.setQuelched(IAXSubclass(f.Subclass) == IAXQuelch)
+		}
+	case FrameControl:
+		// A peer that put us on hold (HOLD passed through by Asterisk)
+		// has no use for our audio either: one hold state for both forms.
+		switch ControlSubclass(f.Subclass) {
+		case ControlHold, ControlUnhold:
+			c.setQuelched(ControlSubclass(f.Subclass) == ControlHold)
 		}
 	case FrameVoice:
 		// The peer's full voice frame is authoritative for the codec.
@@ -645,6 +666,12 @@ func (c *Call) handleFull(f *FullFrame) {
 	if f.Type != FrameVoice {
 		c.queue(f)
 	}
+}
+
+func (c *Call) setQuelched(on bool) {
+	c.mu.Lock()
+	c.quelched = on
+	c.mu.Unlock()
 }
 
 func (c *Call) queue(f *FullFrame) {
@@ -707,7 +734,7 @@ func (c *Call) run() {
 			if data, err := ies.Encode(); err == nil {
 				_, _ = c.sendFull(FrameIAX, uint64(IAXHangup), data)
 			}
-			emit(Event{Kind: EventHangup, Cause: "no reply", CauseCode: CauseLocal})
+			emit(Event{Kind: EventHangup, Cause: "no reply", CauseCode: CauseLocal, Local: true})
 			return
 		case f := <-c.inbox:
 			switch f.Type {
@@ -723,11 +750,28 @@ func (c *Call) run() {
 					}
 					emit(ev)
 					return
+				case IAXQuelch:
+					emit(Event{Kind: EventHold})
+				case IAXUnquelch:
+					emit(Event{Kind: EventUnhold})
+				case IAXTransfer:
+					ev := Event{Kind: EventTransfer}
+					if ies, err := f.IEs(); err == nil {
+						ev.Number = ies.String(IECalledNumber)
+						if ctx := ies.String(IECalledContext); ctx != "" {
+							ev.Number += "@" + ctx
+						}
+					}
+					emit(ev)
 				}
 			case FrameControl:
 				switch ControlSubclass(f.Subclass) {
 				case ControlRinging:
 					emit(Event{Kind: EventRinging})
+				case ControlHold:
+					emit(Event{Kind: EventHold})
+				case ControlUnhold:
+					emit(Event{Kind: EventUnhold})
 				case ControlProgress, ControlProceeding:
 					emit(Event{Kind: EventProceeding})
 				case ControlAnswer:
@@ -762,12 +806,17 @@ func (c *Call) run() {
 // SendVoice sends one encoded voice frame in the negotiated format. The
 // first frame of a call is a full frame (it carries the codec); later ones
 // go as mini frames unless the timestamp crossed a 16-bit boundary, in which
-// case a full frame resynchronises the peer.
+// case a full frame resynchronises the peer. While the call is on hold, on
+// either side, nothing is sent and ErrOnHold is returned.
 func (c *Call) SendVoice(data []byte) error {
 	c.mu.Lock()
 	if c.state != StateUp && c.state != StateAccepted {
 		c.mu.Unlock()
 		return ErrCallDown
+	}
+	if c.onHold || c.quelched {
+		c.mu.Unlock()
+		return ErrOnHold
 	}
 	ts := c.voiceTimestamp(len(data))
 	full := !c.voiceStarted || ts&0xFFFF0000 != c.lastVoiceTS&0xFFFF0000

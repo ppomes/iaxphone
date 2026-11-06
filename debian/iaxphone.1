@@ -20,7 +20,7 @@ iaxphone \- IAX2 softphone for the command line
 .B iaxphone
 speaks IAX2 (RFC 5456), the Inter-Asterisk eXchange protocol, to an
 Asterisk server or any other IAX2 peer. It places and takes calls in G.711
-u-law or A-law, sends and receives DTMF, rings locally and plays the audio
+u-law or A-law, sends and receives DTMF, holds and transfers calls, rings locally and plays the audio
 on the system's sound devices.
 .PP
 .B register
@@ -86,6 +86,20 @@ How long each
 .B \-dtmf
 key is held (default 100ms).
 .TP
+.BI \-onhold " time"
+Put the call on hold for this long once it is answered, after the
+.B \-dtmf
+keys: the server stops sending audio and plays music to whoever is at
+the other end.
+.TP
+.BI \-transfer " number"
+Transfer the call to this number once it is answered, after
+.B \-dtmf
+and
+.BR \-onhold :
+whoever is at the other end is sent there (a blind transfer) and the
+server hangs up on us. A context may follow the number after an @.
+.TP
 .B \-v
 Log every full frame and the audio levels once a second.
 .SH EXAMPLES
@@ -102,6 +116,14 @@ Call extension 603, hold the keys 1234 for 300 ms each once answered:
 .nf
 .RS
 iaxphone \-server pbx \-user phone \-secret s3cret \-dtmf 1234 \-hold 300ms call 603
+.RE
+.fi
+.PP
+Call 2001, hold the call for 5 s, then transfer it to 2002:
+.PP
+.nf
+.RS
+iaxphone \-server pbx \-user phone \-secret s3cret \-onhold 5s \-transfer 2002 call 2001
 .RE
 .fi
 .SH SEE ALSO

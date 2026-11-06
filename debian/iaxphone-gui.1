@@ -8,12 +8,15 @@ iaxphone\-gui \- IAX2 softphone window
 is the window of
 .BR iaxphone (1):
 it registers with the IAX2 server, shows the registration and the current
-call, and offers a number entry, a keypad, Call, Answer and Hang up
-buttons, a mute box and peak level meters.
+call, and offers a number entry, a keypad, Call, Answer, Hang up and
+Transfer buttons, Mute and Hold boxes and peak level meters.
 .PP
 The keypad dials when idle and sends DTMF during a call; a key sounds for
 as long as it is held, 100 ms at least, and so is the DTMF held on the
 wire. Incoming calls ring on the speaker and show a desktop notification.
+Hold stops the audio both ways and lets the server play music to the
+other party; Transfer sends the other party to the number in the entry (a
+blind transfer), after which the server hangs up on us.
 .PP
 The gear button opens the settings: server, account, caller id,
 registration, jitter buffer depth, sound (default devices or none), and
