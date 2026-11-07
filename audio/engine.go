@@ -109,11 +109,20 @@ func (e *Engine) Start() error {
 		}
 	}()
 	if err := e.dev.Start(e.rate, e.onCapture, e.onPlayback); err != nil {
+		e.closed.Store(true) // nothing left for Stop to do
 		close(e.out)
 		e.wg.Wait()
+		e.closeCodec()
 		return err
 	}
 	return nil
+}
+
+// closeCodec frees the codec's state, if it has any to free.
+func (e *Engine) closeCodec() {
+	if c, ok := e.codec.(io.Closer); ok {
+		_ = c.Close()
+	}
 }
 
 // Receive queues a frame from the network for playback.
@@ -129,9 +138,7 @@ func (e *Engine) Stop() error {
 	err := e.dev.Close()
 	close(e.out)
 	e.wg.Wait()
-	if c, ok := e.codec.(io.Closer); ok {
-		_ = c.Close()
-	}
+	e.closeCodec()
 	return err
 }
 

@@ -231,6 +231,28 @@ func TestEngineLongFrames(t *testing.T) {
 	}
 }
 
+// deadDevice cannot start.
+type deadDevice struct{}
+
+func (deadDevice) Start(int, func([]int16), func([]int16)) error { return errors.New("no sound card") }
+func (deadDevice) Close() error                                 { return nil }
+
+// A device that fails to start: Start reports it, the codec is closed all
+// the same and a Stop afterwards is a harmless no-op.
+func TestEngineStartFails(t *testing.T) {
+	codec := &rawCodec{}
+	eng := NewEngine(deadDevice{}, codec, 40, func([]byte) error { return nil })
+	if err := eng.Start(); err == nil || err.Error() != "no sound card" {
+		t.Fatalf("Start: %v", err)
+	}
+	if !codec.closed {
+		t.Error("codec left open after a failed Start")
+	}
+	if err := eng.Stop(); err != nil {
+		t.Errorf("Stop after a failed Start: %v", err)
+	}
+}
+
 // A codec at another rate: the device is started at it, frames are sized
 // for it, the jitter buffer times them right, a lost frame is concealed by
 // the codec, a tone is generated at that rate and Stop closes the codec.
