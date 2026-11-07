@@ -235,7 +235,7 @@ func TestEngineLongFrames(t *testing.T) {
 type deadDevice struct{}
 
 func (deadDevice) Start(int, func([]int16), func([]int16)) error { return errors.New("no sound card") }
-func (deadDevice) Close() error                                 { return nil }
+func (deadDevice) Close() error                                  { return nil }
 
 // A device that fails to start: Start reports it, the codec is closed all
 // the same and a Stop afterwards is a harmless no-op.
