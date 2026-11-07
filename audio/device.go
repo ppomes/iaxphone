@@ -25,16 +25,18 @@ import (
 	"time"
 )
 
-// Device is a full-duplex sound device at SampleRate, mono, 16-bit.
+// Device is a full-duplex sound device, mono, 16-bit, at the sample rate
+// Start is given.
 //
 // It is kept behind an interface so the protocol and codec code can be
 // tested without cgo or a sound card: Malgo is the real one (miniaudio via
 // github.com/gen2brain/malgo), NullDevice the test one.
 type Device interface {
-	// Start begins capture and playback. capture is called with each
-	// FrameSamples frame recorded; playback must fill the frame to play.
-	// Both run on the device's own goroutine and must not block.
-	Start(capture func(pcm []int16), playback func(pcm []int16)) error
+	// Start begins capture and playback at rate samples per second.
+	// capture is called with each frame recorded (FrameSamples(rate) long);
+	// playback must fill the frame to play. Both run on the device's own
+	// goroutine and must not block.
+	Start(rate int, capture func(pcm []int16), playback func(pcm []int16)) error
 	// Close stops the device; the callbacks are not called after it returns.
 	Close() error
 }
@@ -55,13 +57,13 @@ type NullDevice struct {
 }
 
 // Start implements Device.
-func (d *NullDevice) Start(capture func([]int16), playback func([]int16)) error {
+func (d *NullDevice) Start(rate int, capture func([]int16), playback func([]int16)) error {
 	d.stop = make(chan struct{})
 	d.done = make(chan struct{})
 	go func() {
 		defer close(d.done)
-		in := make([]int16, FrameSamples)
-		out := make([]int16, FrameSamples)
+		in := make([]int16, FrameSamples(rate))
+		out := make([]int16, FrameSamples(rate))
 		tick := time.NewTicker(FramePeriod)
 		defer tick.Stop()
 		for {

@@ -5,6 +5,7 @@ Maintainer: Pierre POMES <pierre.pomes@gmail.com>
 Build-Depends: debhelper-compat (= 13),
                golang-go (>= 2:1.26~),
                pkgconf,
+               libopus-dev,
                libgl-dev,
                libegl-dev,
                libx11-dev,

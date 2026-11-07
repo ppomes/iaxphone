@@ -37,6 +37,7 @@ import (
 
 	"github.com/ppomes/iaxphone/audio"
 	"github.com/ppomes/iaxphone/history"
+	"github.com/ppomes/iaxphone/iax2"
 	"github.com/ppomes/iaxphone/phone"
 )
 
@@ -85,6 +86,7 @@ type settings struct {
 	CallerName   string
 	Register     bool
 	JitterMs     int
+	Codec        string // preferred codec name ("opus", "ulaw", "alaw"), the others stay accepted
 	Audio        string // "default" or "none"
 	Mic          string // capture device name, "" for the default
 	Speaker      string // playback device name, "" for the default
@@ -104,6 +106,7 @@ func loadSettings(p fyne.Preferences) settings {
 		CallerName:   p.StringWithFallback("caller_name", "iaxphone"),
 		Register:     p.BoolWithFallback("register", true),
 		JitterMs:     p.IntWithFallback("jitter_ms", audio.DefaultJitterMs),
+		Codec:        p.StringWithFallback("codec", phone.SupportedCodecs()[0].String()),
 		Audio:        p.StringWithFallback("audio", "default"),
 		Mic:          p.String("mic"),
 		Speaker:      p.String("speaker"),
@@ -118,6 +121,7 @@ func (s settings) save(p fyne.Preferences) {
 	p.SetString("caller_name", s.CallerName)
 	p.SetBool("register", s.Register)
 	p.SetInt("jitter_ms", s.JitterMs)
+	p.SetString("codec", s.Codec)
 	p.SetString("audio", s.Audio)
 	p.SetString("mic", s.Mic)
 	p.SetString("speaker", s.Speaker)
@@ -148,8 +152,30 @@ func (s settings) phoneConfig(log *slog.Logger) phone.Config {
 		Register:     s.Register,
 		OpenDevice:   open,
 		JitterMs:     s.JitterMs,
+		Codecs:       s.codecs(),
 		Logger:       log,
 	}
+}
+
+// codecs is the codec list for the settings: the preferred one first, then
+// the other supported ones. An unknown name leaves the default order.
+func (s settings) codecs() []iax2.Format {
+	codecs := phone.SupportedCodecs()
+	for i, f := range codecs {
+		if f.String() == s.Codec {
+			return append(append([]iax2.Format{f}, codecs[:i]...), codecs[i+1:]...)
+		}
+	}
+	return codecs
+}
+
+// codecNames lists the supported codecs for the settings form.
+func codecNames() []string {
+	var names []string
+	for _, f := range phone.SupportedCodecs() {
+		names = append(names, f.String())
+	}
+	return names
 }
 
 // start creates the controller for the current settings and forwards its
